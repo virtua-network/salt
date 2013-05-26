@@ -250,7 +250,7 @@ class ConfigDirMixIn(object):
 
     def _mixin_setup(self):
         self.add_option(
-            '-c', '--config-dir', default='/etc/salt',
+            '-c', '--config-dir', default='/opt/local/etc/salt',
             help=('Pass in an alternative configuration directory. Default: '
                   '%default')
         )
