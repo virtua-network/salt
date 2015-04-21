@@ -2,19 +2,19 @@
 Logging
 =======
 
-The salt project tries to get the logging to work for you and help us solve any 
+The salt project tries to get the logging to work for you and help us solve any
 issues you might find along the way.
 
-If you want to get some more information on the nitty-gritty of salt's logging 
-system, please head over to the :doc:`logging development 
-document</topics/development/logging>`, if all you're after is salt's logging 
+If you want to get some more information on the nitty-gritty of salt's logging
+system, please head over to the :doc:`logging development
+document</topics/development/logging>`, if all you're after is salt's logging
 configurations, please continue reading.
 
 
 Available Configuration Settings
 ================================
 
-.. conf-log:: log_file
+.. conf_log:: log_file
 
 ``log_file``
 ------------
@@ -51,7 +51,7 @@ Examples:
 
 
 
-.. conf-log:: log_level
+.. conf_log:: log_level
 
 ``log_level``
 -------------
@@ -59,7 +59,7 @@ Examples:
 Default: ``warning``
 
 The level of log record messages to send to the console.
-One of ``all``, ``garbage``, ``trace``, ``debug``, ``info``, ``warning``, 
+One of ``all``, ``garbage``, ``trace``, ``debug``, ``info``, ``warning``,
 ``error``, ``critical``, ``quiet``.
 
 .. code-block:: yaml
@@ -68,7 +68,7 @@ One of ``all``, ``garbage``, ``trace``, ``debug``, ``info``, ``warning``,
 
 
 
-.. conf-log:: log_level_logfile
+.. conf_log:: log_level_logfile
 
 ``log_level_logfile``
 ---------------------
@@ -76,7 +76,7 @@ One of ``all``, ``garbage``, ``trace``, ``debug``, ``info``, ``warning``,
 Default: ``warning``
 
 The level of messages to send to the log file.
-One of ``all``, ``garbage``, ``trace``, ``debug``, ``info``, ``warning``, 
+One of ``all``, ``garbage``, ``trace``, ``debug``, ``info``, ``warning``,
 ``error``, ``critical``, ``quiet``.
 
 .. code-block:: yaml
@@ -85,14 +85,14 @@ One of ``all``, ``garbage``, ``trace``, ``debug``, ``info``, ``warning``,
 
 
 
-.. conf-log:: log_datefmt
+.. conf_log:: log_datefmt
 
 ``log_datefmt``
 ---------------
 
 Default: ``%H:%M:%S``
 
-The date and time format used in console log messages. Allowed date/time 
+The date and time format used in console log messages. Allowed date/time
 formatting can be seen on :func:`time.strftime <python2:time.strftime>`.
 
 .. code-block:: yaml
@@ -101,14 +101,14 @@ formatting can be seen on :func:`time.strftime <python2:time.strftime>`.
 
 
 
-.. conf-log:: log_datefmt_logfile
+.. conf_log:: log_datefmt_logfile
 
 ``log_datefmt_logfile``
 -----------------------
 
 Default: ``%Y-%m-%d %H:%M:%S``
 
-The date and time format used in log file messages. Allowed date/time 
+The date and time format used in log file messages. Allowed date/time
 formatting can be seen on :func:`time.strftime <python2:time.strftime>`.
 
 .. code-block:: yaml
@@ -117,15 +117,29 @@ formatting can be seen on :func:`time.strftime <python2:time.strftime>`.
 
 
 
-.. conf-log:: log_fmt_console
+.. conf_log:: log_fmt_console
 
 ``log_fmt_console``
 -------------------
 
 Default: ``[%(levelname)-8s] %(message)s``
 
-The format of the console logging messages. Allowed formatting options can
-be seen on the :ref:`LogRecord attributes <python2:logrecord-attributes>`.
+The format of the console logging messages. All standard python logging
+:ref:`LogRecord attributes <python2:logrecord-attributes>` can be used.  Salt
+also provides these custom LogRecord attributes to colorize console log output:
+
+.. code-block:: python
+
+    '%(colorlevel)s'   # log level name colorized by level
+    '%(colorname)s'    # colorized module name
+    '%(colorprocess)s' # colorized process number
+    '%(colormsg)s'     # log message colorized by level
+
+.. note::
+    The ``%(colorlevel)s``, ``%(colorname)s``, and ``%(colorprocess)``
+    LogRecord attributes also include padding and enclosing brackets, ``[`` and
+    ``]`` to match the default values of their collateral non-colorized
+    LogRecord attributes.
 
 .. code-block:: yaml
 
@@ -133,15 +147,23 @@ be seen on the :ref:`LogRecord attributes <python2:logrecord-attributes>`.
 
 
 
-.. conf-log:: log_fmt_logfile
+.. conf_log:: log_fmt_logfile
 
 ``log_fmt_logfile``
 -------------------
 
 Default: ``%(asctime)s,%(msecs)03.0f [%(name)-17s][%(levelname)-8s] %(message)s``
 
-The format of the log file logging messages. Allowed formatting options can
-be seen on the :ref:`LogRecord attributes <python2:logrecord-attributes>`.
+The format of the log file logging messages. All standard python logging
+:ref:`LogRecord attributes <python2:logrecord-attributes>` can be used.  Salt
+also provides these custom LogRecord attributes that include padding and
+enclosing brackets ``[`` and ``]``:
+
+.. code-block:: python
+
+    '%(bracketlevel)s'   # equivalent to [%(levelname)-8s]
+    '%(bracketname)s'    # equivalent to [%(name)-17s]
+    '%(bracketprocess)s' # equivalent to [%(process)5s]
 
 .. code-block:: yaml
 
@@ -149,21 +171,21 @@ be seen on the :ref:`LogRecord attributes <python2:logrecord-attributes>`.
 
 
 
-.. conf-log:: log_granular_levels
+.. conf_log:: log_granular_levels
 
 ``log_granular_levels``
 -----------------------
 
 Default: ``{}``
 
-This can be used to control logging levels more specifically.  The example sets 
-the main salt library at the 'warning' level, but sets ``salt.modules`` to log 
+This can be used to control logging levels more specifically.  The example sets
+the main salt library at the 'warning' level, but sets ``salt.modules`` to log
 at the ``debug`` level:
 
 .. code-block:: yaml
 
   log_granular_levels:
-    'salt': 'warning',
+    'salt': 'warning'
     'salt.modules': 'debug'
 
 

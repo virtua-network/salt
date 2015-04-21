@@ -2,6 +2,7 @@
 '''
 Manage groups on Solaris
 '''
+from __future__ import absolute_import
 
 # Import python libs
 import logging
@@ -18,12 +19,15 @@ try:
 except ImportError:
     pass
 
+# Define the module's virtual name
+__virtualname__ = 'group'
+
 
 def __virtual__():
     '''
     Set the group module if the kernel is SunOS
     '''
-    return 'group' if __grains__['kernel'] == 'SunOS' else False
+    return __virtualname__ if __grains__['kernel'] == 'SunOS' else False
 
 
 def add(name, gid=None, **kwargs):
@@ -47,7 +51,7 @@ def add(name, gid=None, **kwargs):
         cmd += '-g {0} '.format(gid)
     cmd += name
 
-    ret = __salt__['cmd.run_all'](cmd)
+    ret = __salt__['cmd.run_all'](cmd, python_shell=False)
 
     return not ret['retcode']
 
@@ -62,7 +66,7 @@ def delete(name):
 
         salt '*' group.delete foo
     '''
-    ret = __salt__['cmd.run_all']('groupdel {0}'.format(name))
+    ret = __salt__['cmd.run_all']('groupdel {0}'.format(name), python_shell=False)
 
     return not ret['retcode']
 
@@ -123,7 +127,7 @@ def chgid(name, gid):
     if gid == pre_gid:
         return True
     cmd = 'groupmod -g {0} {1}'.format(gid, name)
-    __salt__['cmd.run'](cmd)
+    __salt__['cmd.run'](cmd, python_shell=False)
     post_gid = __salt__['file.group_to_gid'](name)
     if post_gid != pre_gid:
         return post_gid == gid

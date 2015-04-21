@@ -2,15 +2,32 @@
 '''
 Support for Tomcat
 
-This module uses the manager webapp to manage Apache tomcat webapps
-If the manager webapp is not configured some of the functions won't work
+This module uses the manager webapp to manage Apache tomcat webapps.
+If the manager webapp is not configured some of the functions won't work.
 
-The following grains/pillar should be set::
+.. note::
 
-    tomcat-manager.user: admin user name
-    tomcat-manager.passwd: password
+    The config format was changed in 2014.7.0, but backwards compatibility for
+    the old-style config will be in the 2014.7.1 release.
 
-and also configure a user in the conf/tomcat-users.xml file::
+The following grains/pillar should be set:
+
+.. code-block:: yaml
+
+    tomcat-manager:
+      user: <username>
+      passwd: <password>
+
+or the old format:
+
+.. code-block:: yaml
+
+    tomcat-manager.user: <username>
+    tomcat-manager.passwd: <password>
+
+Also configure a user in the conf/tomcat-users.xml file:
+
+.. code-block:: xml
 
     <?xml version='1.0' encoding='utf-8'?>
     <tomcat-users>
@@ -18,42 +35,70 @@ and also configure a user in the conf/tomcat-users.xml file::
         <user username="tomcat" password="tomcat" roles="manager-script"/>
     </tomcat-users>
 
-Notes:
+.. note::
 
-- More information about tomcat manager:
-  http://tomcat.apache.org/tomcat-7.0-doc/manager-howto.html
-- if you use only this module for deployments you've might want to strict
-  access to the manager only from localhost for more info:
-  http://tomcat.apache.org/tomcat-7.0-doc/manager-howto.html#Configuring_Manager_Application_Access
-- Tested on:
+   - More information about tomcat manager:
+     http://tomcat.apache.org/tomcat-7.0-doc/manager-howto.html
+   - if you use only this module for deployments you've might want to strict
+     access to the manager only from localhost for more info:
+     http://tomcat.apache.org/tomcat-7.0-doc/manager-howto.html#Configuring_Manager_Application_Access
+   - Tested on:
 
-  JVM Vendor:
-      Sun Microsystems Inc.
-  JVM Version:
-      1.6.0_43-b01
-  OS Architecture:
-      amd64
-  OS Name:
-      Linux
-  OS Version:
-      2.6.32-358.el6.x86_64
-  Tomcat Version:
-      Apache Tomcat/7.0.37
+     JVM Vendor:
+         Sun Microsystems Inc.
+     JVM Version:
+         1.6.0_43-b01
+     OS Architecture:
+         amd64
+     OS Name:
+         Linux
+     OS Version:
+         2.6.32-358.el6.x86_64
+     Tomcat Version:
+         Apache Tomcat/7.0.37
 '''
+from __future__ import absolute_import
 
 # Import python libs
 import glob
 import hashlib
-import urllib
-import urllib2
 import tempfile
 import os
+import re
+import logging
+
+# Import 3rd-party libs
+# pylint: disable=no-name-in-module,import-error
+from salt.ext.six.moves.urllib.parse import urlencode as _urlencode
+from salt.ext.six.moves.urllib.request import (
+        urlopen as _urlopen,
+        HTTPBasicAuthHandler as _HTTPBasicAuthHandler,
+        HTTPDigestAuthHandler as _HTTPDigestAuthHandler,
+        build_opener as _build_opener,
+        install_opener as _install_opener
+)
+# pylint: enable=no-name-in-module,import-error
 
 # Import Salt libs
 import salt.utils
 
+log = logging.getLogger(__name__)
+
 __func_alias__ = {
     'reload_': 'reload'
+}
+
+# Support old-style grains/pillar
+# config as well as new.
+__valid_configs = {
+    'user': [
+        'tomcat-manager.user',
+        'tomcat-manager:user'
+    ],
+    'passwd': [
+        'tomcat-manager.passwd',
+        'tomcat-manager:passwd'
+    ]
 }
 
 
@@ -72,10 +117,37 @@ def __catalina_home():
     '''
     locations = ['/usr/share/tomcat*', '/opt/tomcat']
     for location in locations:
-        catalina_home = glob.glob(location)
-        if catalina_home:
-            return catalina_home[-1]
+        folders = glob.glob(location)
+        if folders:
+            for catalina_home in folders:
+                if os.path.isdir(catalina_home + "/bin"):
+                    return catalina_home
     return False
+
+
+def _get_credentials():
+    '''
+    Get the username and password from opts, grains, or pillar
+    '''
+    ret = {
+        'user': False,
+        'passwd': False
+    }
+
+    # Loop through opts, grains, and pillar
+    # Return the first acceptable configuration found
+    for item in ret:
+        for struct in [__opts__, __grains__, __pillar__]:
+            # Look for the config key
+            # Support old-style config format and new
+            for config_key in __valid_configs[item]:
+                value = salt.utils.traverse_dict_and_list(struct,
+                                                          config_key,
+                                                          None)
+                if value:
+                    ret[item] = value
+                    break
+    return ret['user'], ret['passwd']
 
 
 def _auth(uri):
@@ -86,28 +158,18 @@ def _auth(uri):
 
     If user & pass are missing return False
     '''
-    try:
-        user = __grains__['tomcat-manager.user']
-        password = __grains__['tomcat-manager.passwd']
-    except KeyError:
-        try:
-            user = salt.utils.option('tomcat-manager.user', '', __opts__,
-                    __pillar__)
-            password = salt.utils.option('tomcat-manager.passwd', '', __opts__,
-                    __pillar__)
-        except Exception:
-            return False
 
-    if user == '' or password == '':
+    user, password = _get_credentials()
+    if user is False or password is False:
         return False
 
-    basic = urllib2.HTTPBasicAuthHandler()
+    basic = _HTTPBasicAuthHandler()
     basic.add_password(realm='Tomcat Manager Application', uri=uri,
             user=user, passwd=password)
-    digest = urllib2.HTTPDigestAuthHandler()
+    digest = _HTTPDigestAuthHandler()
     digest.add_password(realm='Tomcat Manager Application', uri=uri,
             user=user, passwd=password)
-    return urllib2.build_opener(basic, digest)
+    return _build_opener(basic, digest)
 
 
 def _wget(cmd, opts=None, url='http://localhost:8080/manager', timeout=180):
@@ -152,19 +214,19 @@ def _wget(cmd, opts=None, url='http://localhost:8080/manager', timeout=180):
     url += 'text/{0}'.format(cmd)
     url6 += '{0}'.format(cmd)
     if opts:
-        url += '?{0}'.format(urllib.urlencode(opts))
-        url6 += '?{0}'.format(urllib.urlencode(opts))
+        url += '?{0}'.format(_urlencode(opts))
+        url6 += '?{0}'.format(_urlencode(opts))
 
     # Make the HTTP request
-    urllib2.install_opener(auth)
+    _install_opener(auth)
 
     try:
         # Trying tomcat >= 7 url
-        ret['msg'] = urllib2.urlopen(url, timeout=timeout).read().splitlines()
+        ret['msg'] = _urlopen(url, timeout=timeout).read().splitlines()
     except Exception:
         try:
             # Trying tomcat6 url
-            ret['msg'] = urllib2.urlopen(url6, timeout=timeout).read().splitlines()
+            ret['msg'] = _urlopen(url6, timeout=timeout).read().splitlines()
         except Exception:
             ret['msg'] = 'Failed to create HTTP request'
 
@@ -206,8 +268,8 @@ def leaks(url='http://localhost:8080/manager', timeout=180):
         salt '*' tomcat.leaks
     '''
 
-    return '\n'.join(_wget('findleaks', {'statusLine': 'true'},
-        url, timeout=timeout)['msg'])
+    return _wget('findleaks', {'statusLine': 'true'},
+        url, timeout=timeout)['msg']
 
 
 def status(url='http://localhost:8080/manager', timeout=180):
@@ -384,7 +446,7 @@ def status_webapp(app, url='http://localhost:8080/manager', timeout=180):
 
 def serverinfo(url='http://localhost:8080/manager', timeout=180):
     '''
-    return detailes about the server
+    return details about the server
 
     url : http://localhost:8080/manager
         the URL of the server manager webapp
@@ -401,7 +463,7 @@ def serverinfo(url='http://localhost:8080/manager', timeout=180):
 
     data = _wget('serverinfo', {}, url, timeout=timeout)
     if data['res'] is False:
-        return {'error': data['msg'][0]}
+        return {'error': data['msg']}
 
     ret = {}
     data['msg'].pop(0)
@@ -438,8 +500,10 @@ def deploy_war(war,
                context,
                force='no',
                url='http://localhost:8080/manager',
-               env='base',
-               timeout=180):
+               saltenv='base',
+               timeout=180,
+               env=None,
+               temp_war_location=None):
     '''
     Deploy a WAR file
 
@@ -452,15 +516,19 @@ def deploy_war(war,
         set True to deploy the webapp even one is deployed in the context
     url : http://localhost:8080/manager
         the URL of the server manager webapp
-    env : base
+    saltenv : base
         the environment for WAR file in used by salt.modules.cp.get_url
         function
     timeout : 180
         timeout for HTTP request
+    temp_war_location : None
+        use another location to temporarily copy to war file
+        by default the system's temp directory is used
 
     CLI Examples:
 
     cp module
+
     .. code-block:: bash
 
         salt '*' tomcat.deploy_war salt://application.war /api
@@ -468,33 +536,56 @@ def deploy_war(war,
         salt '*' tomcat.deploy_war salt://application.war /api yes http://localhost:8080/manager
 
     minion local file system
+
     .. code-block:: bash
 
         salt '*' tomcat.deploy_war /tmp/application.war /api
         salt '*' tomcat.deploy_war /tmp/application.war /api no
         salt '*' tomcat.deploy_war /tmp/application.war /api yes http://localhost:8080/manager
     '''
+    if env is not None:
+        salt.utils.warn_until(
+            'Boron',
+            'Passing a salt environment should be done using \'saltenv\' '
+            'not \'env\'. This functionality will be removed in Salt Boron.'
+        )
+        # Backwards compatibility
+        saltenv = env
+
+    # Decide the location to copy the war for the deployment
+    tfile = 'salt.{0}'.format(os.path.basename(war))
+    if temp_war_location is not None:
+        if not os.path.isdir(temp_war_location):
+            return 'Error - "{0}" is not a directory'.format(temp_war_location)
+        tfile = os.path.join(temp_war_location, tfile)
+    else:
+        tfile = os.path.join(tempfile.gettempdir(), tfile)
 
     # Copy file name if needed
-    tfile = war
     cache = False
     if not os.path.isfile(war):
         cache = True
-        tfile = os.path.join(tempfile.gettempdir(), 'salt.' +
-                os.path.basename(war))
-        cached = __salt__['cp.get_url'](war, tfile, env)
+        cached = __salt__['cp.get_url'](war, tfile, saltenv)
         if not cached:
             return 'FAIL - could not cache the WAR file'
         try:
             __salt__['file.set_mode'](cached, '0644')
         except KeyError:
             pass
+    else:
+        tfile = war
+
+    version_extract = re.findall("\\d+.\\d+.\\d+?", os.path.basename(war).replace('.war', ''))
+    if len(version_extract) == 1:
+        version_string = version_extract[0]
+    else:
+        version_string = None
 
     # Prepare options
     opts = {
         'war': 'file:{0}'.format(tfile),
         'path': context,
-        'version': os.path.basename(war).replace('.war', ''),
+        'version': version_string,
     }
     if force == 'yes':
         opts['update'] = 'true'
@@ -515,7 +606,7 @@ def passwd(passwd,
            alg='md5',
            realm=None):
     '''
-    This function replaces the $CATALINS_HOME/bin/digest.sh script
+    This function replaces the $CATALINA_HOME/bin/digest.sh script
     convert a clear-text password to the $CATALINA_BASE/conf/tomcat-users.xml
     format
 
@@ -585,7 +676,7 @@ def fullversion():
             continue
         if ': ' in line:
             comps = line.split(': ')
-            ret[comps[0]] = comps[1]
+            ret[comps[0]] = comps[1].lstrip()
     return ret
 
 
@@ -611,3 +702,31 @@ def signal(signal=None):
         __catalina_home(), valid_signals[signal]
     )
     __salt__['cmd.run'](cmd)
+
+
+if __name__ == '__main__':
+    '''
+    Allow testing from the CLI
+    '''  # pylint: disable=W0105
+    __opts__ = {}
+    __grains__ = {}
+    __pillar__ = {
+        'tomcat-manager.user': 'foobar',
+        'tomcat-manager.passwd': 'barfoo1!',
+    }
+
+    old_format_creds = _get_credentials()
+
+    __pillar__ = {
+        'tomcat-manager': {
+            'user': 'foobar',
+            'passwd': 'barfoo1!'
+        }
+    }
+
+    new_format_creds = _get_credentials()
+
+    if old_format_creds == new_format_creds:
+        log.info('Config backwards compatible')
+    else:
+        log.ifno('Config not backwards compatible')

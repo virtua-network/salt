@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 '''
-Read tops data from a mongodb collection.
+Read tops data from a mongodb collection
 
 This module will load tops data from a mongo collection. It uses the node's id
 for lookups.
@@ -41,6 +41,7 @@ Configuring the Mongo Tops Subsystem
 Module Documentation
 ====================
 '''
+from __future__ import absolute_import
 
 # Import python libs
 import logging

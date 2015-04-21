@@ -1,4 +1,7 @@
+# -*- coding: utf-8 -*-
+
 # Import python libs
+from __future__ import absolute_import
 import os
 import sys
 import shutil
@@ -14,6 +17,9 @@ ensure_in_syspath('../../')
 import integration
 import salt.utils
 import salt.utils.find
+
+# Import 3rd-party libs
+from salt.ext.six.moves import range  # pylint: disable=import-error,redefined-builtin
 
 
 class TestFind(TestCase):
@@ -79,8 +85,6 @@ class TestFind(TestCase):
         self.assertEqual(resolution, 86400)
         self.assertEqual(modifier, '-')
 
-
-
     def test_parse_size(self):
         self.assertRaises(ValueError, salt.utils.find._parse_size, '')
         self.assertRaises(ValueError, salt.utils.find._parse_size, '1s1s')
@@ -145,7 +149,7 @@ class TestFind(TestCase):
             ValueError, salt.utils.find.RegexOption, 'name', '(.*}'
         )
 
-        option = salt.utils.find.RegexOption('name', '.*\.txt')
+        option = salt.utils.find.RegexOption('name', r'.*\.txt')
         self.assertIs(option.match('', '', ''), None)
         self.assertIs(option.match('', 'hello.txt', '').group(), 'hello.txt')
         self.assertIs(option.match('', 'HELLO.TXT', ''), None)
@@ -155,7 +159,7 @@ class TestFind(TestCase):
             ValueError, salt.utils.find.IregexOption, 'name', '(.*}'
         )
 
-        option = salt.utils.find.IregexOption('name', '.*\.txt')
+        option = salt.utils.find.IregexOption('name', r'.*\.txt')
         self.assertIs(option.match('', '', ''), None)
         self.assertIs(option.match('', 'hello.txt', '').group(), 'hello.txt')
         self.assertIs(option.match('', 'HELLO.TXT', '').group(), 'HELLO.TXT')
@@ -229,7 +233,7 @@ class TestFind(TestCase):
             ValueError, salt.utils.find.GroupOption, 'group', 'notexist'
         )
 
-        if sys.platform.startswith(('darwin', 'freebsd')):
+        if sys.platform.startswith(('darwin', 'freebsd', 'openbsd')):
             group_name = 'wheel'
         else:
             group_name = 'root'
@@ -238,7 +242,7 @@ class TestFind(TestCase):
 
     @skipIf(sys.platform.startswith('win'), 'No /dev/null on Windows')
     def test_group_option_match(self):
-        if sys.platform.startswith(('darwin', 'freebsd')):
+        if sys.platform.startswith(('darwin', 'freebsd', 'openbsd')):
             group_name = 'wheel'
         else:
             group_name = 'root'
@@ -414,7 +418,7 @@ class TestPrintOption(TestCase):
     @skipIf(sys.platform.startswith('Windows'), "no /dev/null on windows")
     def test_print_group(self):
         option = salt.utils.find.PrintOption('print', 'group')
-        if sys.platform.startswith(('darwin', 'freebsd')):
+        if sys.platform.startswith(('darwin', 'freebsd', 'openbsd')):
             group_name = 'wheel'
         else:
             group_name = 'root'
@@ -476,7 +480,7 @@ class TestFinder(TestCase):
             str(finder.criteria[0].__class__)[-13:-2], 'InameOption'
         )
 
-        finder = salt.utils.find.Finder({'regex': '.*\.txt'})
+        finder = salt.utils.find.Finder({'regex': r'.*\.txt'})
         self.assertEqual(
             str(finder.actions[0].__class__)[-13:-2], 'PrintOption'
         )
@@ -484,7 +488,7 @@ class TestFinder(TestCase):
             str(finder.criteria[0].__class__)[-13:-2], 'RegexOption'
         )
 
-        finder = salt.utils.find.Finder({'iregex': '.*\.txt'})
+        finder = salt.utils.find.Finder({'iregex': r'.*\.txt'})
         self.assertEqual(
             str(finder.actions[0].__class__)[-13:-2], 'PrintOption'
         )
@@ -508,7 +512,7 @@ class TestFinder(TestCase):
             str(finder.criteria[0].__class__)[-13:-2], 'OwnerOption'
         )
 
-        if sys.platform.startswith(('darwin', 'freebsd')):
+        if sys.platform.startswith(('darwin', 'freebsd', 'openbsd')):
             group_name = 'wheel'
         else:
             group_name = 'root'

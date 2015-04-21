@@ -1,4 +1,7 @@
+# -*- coding: utf-8 -*-
+
 # Import python libs
+from __future__ import absolute_import
 import getpass
 import grp
 import pwd
@@ -6,7 +9,7 @@ import os
 import shutil
 import sys
 
-from mock import patch, MagicMock
+from salttesting.mock import patch, MagicMock
 
 # Import Salt Testing libs
 from salttesting import skipIf
@@ -42,7 +45,8 @@ class FileModuleTest(integration.ModuleCase):
         super(FileModuleTest, self).setUp()
 
     def tearDown(self):
-        os.remove(self.myfile)
+        if os.path.isfile(self.myfile):
+            os.remove(self.myfile)
         if os.path.islink(self.mysymlink):
             os.remove(self.mysymlink)
         if os.path.islink(self.mybadsymlink):
@@ -55,7 +59,7 @@ class FileModuleTest(integration.ModuleCase):
         user = getpass.getuser()
         if sys.platform == 'darwin':
             group = 'staff'
-        elif sys.platform.startswith(('linux', 'freebsd')):
+        elif sys.platform.startswith(('linux', 'freebsd', 'openbsd')):
             group = grp.getgrgid(pwd.getpwuid(os.getuid()).pw_gid).gr_name
         ret = self.run_function('file.chown', arg=[self.myfile, user, group])
         self.assertIsNone(ret)
@@ -83,7 +87,7 @@ class FileModuleTest(integration.ModuleCase):
         user = getpass.getuser()
         if sys.platform == 'darwin':
             group = 'staff'
-        elif sys.platform.startswith(('linux', 'freebsd')):
+        elif sys.platform.startswith(('linux', 'freebsd', 'openbsd')):
             group = grp.getgrgid(pwd.getpwuid(os.getuid()).pw_gid).gr_name
         ret = self.run_function('file.chown',
                                 arg=['/tmp/nosuchfile', user, group])
@@ -103,7 +107,7 @@ class FileModuleTest(integration.ModuleCase):
     def test_chgrp(self):
         if sys.platform == 'darwin':
             group = 'everyone'
-        elif sys.platform.startswith(('linux', 'freebsd')):
+        elif sys.platform.startswith(('linux', 'freebsd', 'openbsd')):
             group = grp.getgrgid(pwd.getpwuid(os.getuid()).pw_gid).gr_name
         ret = self.run_function('file.chgrp', arg=[self.myfile, group])
         self.assertIsNone(ret)
@@ -138,23 +142,23 @@ class FileModuleTest(integration.ModuleCase):
             self.assertEqual(fp.read(), 'Hello world\n')
 
     def test_remove_file(self):
-        ret = self.run_function('file.remove', args=[self.myfile])
+        ret = self.run_function('file.remove', arg=[self.myfile])
         self.assertTrue(ret)
 
     def test_remove_dir(self):
-        ret = self.run_function('file.remove', args=[self.mydir])
+        ret = self.run_function('file.remove', arg=[self.mydir])
         self.assertTrue(ret)
 
     def test_remove_symlink(self):
-        ret = self.run_function('file.remove', args=[self.mysymlink])
+        ret = self.run_function('file.remove', arg=[self.mysymlink])
         self.assertTrue(ret)
 
     def test_remove_broken_symlink(self):
-        ret = self.run_function('file.remove', args=[self.mybadsymlink])
+        ret = self.run_function('file.remove', arg=[self.mybadsymlink])
         self.assertTrue(ret)
 
     def test_cannot_remove(self):
-        ret = self.run_function('file.remove', args=['/dev/tty'])
+        ret = self.run_function('file.remove', arg=['tty'])
         self.assertEqual(
             'ERROR executing \'file.remove\': File path must be absolute.', ret
         )
@@ -185,10 +189,10 @@ class FileModuleTest(integration.ModuleCase):
             'cp.list_master': MagicMock(side_effect=list_master),
             'cp.list_master_dirs': MagicMock(return_value=[]),
         }
-        ret = filemod.source_list(['salt://http/httpd.conf?env=dev',
+        ret = filemod.source_list(['salt://http/httpd.conf?saltenv=dev',
                                    'salt://http/httpd.conf.fallback'],
                                   'filehash', 'base')
-        self.assertItemsEqual(ret, ['salt://http/httpd.conf?env=dev',
+        self.assertItemsEqual(ret, ['salt://http/httpd.conf?saltenv=dev',
                                     'filehash'])
 
     def test_source_list_for_list_returns_file_from_dict(self):

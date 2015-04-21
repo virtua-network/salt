@@ -2,12 +2,14 @@
 '''
 Module for managing quotas on POSIX-like systems.
 '''
+from __future__ import absolute_import
 
 # Import python libs
 import logging
 
 # Import salt libs
 import salt.utils
+from salt.exceptions import CommandExecutionError, SaltInvocationError
 
 log = logging.getLogger(__name__)
 
@@ -20,11 +22,11 @@ __func_alias__ = {
 
 def __virtual__():
     '''
-    Only work on POSIX-like systems
+    Only work on POSIX-like systems with setquota binary available
     '''
-    if salt.utils.is_windows():
-        return False
-    return 'quota'
+    if not salt.utils.is_windows() and salt.utils.which('setquota'):
+        return 'quota'
+    return False
 
 
 def report(mount):
@@ -48,7 +50,7 @@ def _parse_quota(mount, opts):
     Parse the output from repquota. Requires that -u -g are passed in
     '''
     cmd = 'repquota -vp {0} {1}'.format(opts, mount)
-    out = __salt__['cmd.run'](cmd).splitlines()
+    out = __salt__['cmd.run'](cmd, python_shell=False).splitlines()
     mode = 'header'
 
     if '-u' in opts:
@@ -62,9 +64,7 @@ def _parse_quota(mount, opts):
             continue
         comps = line.split()
         if mode == 'header':
-            if 'Report for' in line:
-                pass
-            elif 'Block grace time' in line:
+            if 'Block grace time' in line:
                 blockg, inodeg = line.split(';')
                 blockgc = blockg.split(': ')
                 inodegc = inodeg.split(': ')
@@ -115,7 +115,9 @@ def set_(device, **kwargs):
 
     if 'group' in kwargs:
         if 'user' in kwargs:
-            return {'Error': 'Please specify a user or group, not both.'}
+            raise SaltInvocationError(
+                'Please specify a user or group, not both.'
+            )
         cmd += ' -g {0} '.format(kwargs['group'])
         parsed = _parse_quota(device, '-g')
         if kwargs['group'] in parsed:
@@ -125,7 +127,7 @@ def set_(device, **kwargs):
         ret = 'Group: {0}'.format(kwargs['group'])
 
     if not current:
-        return {'Error': 'A valid user or group was not found'}
+        raise CommandExecutionError('A valid user or group was not found')
 
     for limit in ('block-soft-limit', 'block-hard-limit',
                   'file-soft-limit', 'file-hard-limit'):
@@ -138,8 +140,12 @@ def set_(device, **kwargs):
                                         current['file-hard-limit'],
                                         device)
 
-    __salt__['cmd.run'](cmd)
-
+    result = __salt__['cmd.run_all'](cmd, python_shell=False)
+    if result['retcode'] != 0:
+        raise CommandExecutionError(
+            'Unable to set desired quota. Error follows: \n{0}'
+            .format(result['stderr'])
+        )
     return {ret: current}
 
 
@@ -189,7 +195,7 @@ def on(device):
         salt '*' quota.on
     '''
     cmd = 'quotaon {0}'.format(device)
-    __salt__['cmd.run'](cmd)
+    __salt__['cmd.run'](cmd, python_shell=False)
     return True
 
 
@@ -204,7 +210,7 @@ def off(device):
         salt '*' quota.off
     '''
     cmd = 'quotaoff {0}'.format(device)
-    __salt__['cmd.run'](cmd)
+    __salt__['cmd.run'](cmd, python_shell=False)
     return True
 
 
@@ -220,10 +226,18 @@ def get_mode(device):
     '''
     ret = {}
     cmd = 'quotaon -p {0}'.format(device)
-    out = __salt__['cmd.run'](cmd)
+    out = __salt__['cmd.run'](cmd, python_shell=False)
     for line in out.splitlines():
         comps = line.strip().split()
         if comps[3] not in ret:
+            if comps[0].startswith('quotaon'):
+                if comps[1].startswith('Mountpoint'):
+                    ret[comps[4]] = 'disabled'
+                    continue
+                elif comps[1].startswith('Cannot'):
+                    ret[device] = 'Not found'
+                    return ret
+                continue
             ret[comps[3]] = {
                 'device': comps[4].replace('(', '').replace(')', ''),
             }

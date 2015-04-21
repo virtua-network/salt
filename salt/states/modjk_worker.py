@@ -1,15 +1,18 @@
 # -*- coding: utf-8 -*-
 '''
-Send commands to a :strong:`modjk` load balancer via the peer system
+Manage modjk workers
+====================
+
+Send commands to a :strong:`modjk` load balancer via the peer system.
 
 This module can be used with the :doc:`prereq </ref/states/requisites>`
 requisite to remove/add the worker from the load balancer before
-deploying/restarting service
+deploying/restarting service.
 
 Mandatory Settings:
 
 - The minion needs to have permission to publish the :strong:`modjk.*`
-  functions (see :doc:`here </ref/peer>` here for information on configuring
+  functions (see :doc:`here </ref/peer>` for information on configuring
   peer publishing permissions)
 
 - The modjk load balancer must be configured as stated in the :strong:`modjk`
@@ -21,7 +24,7 @@ def __virtual__():
     '''
     Check if we have peer access ?
     '''
-    return 'modjk_worker'
+    return True
 
 
 def _send_command(cmd,
@@ -172,7 +175,9 @@ def stop(name, lbn, target, profile='default', expr_form='glob'):
     Stop the named worker from the lbn load balancers at the targeted minions
     The worker won't get any traffic from the lbn
 
-    Example::
+    Example:
+
+    .. code-block:: yaml
 
         disable-before-deploy:
           modjk_worker.stop:
@@ -190,7 +195,9 @@ def activate(name, lbn, target, profile='default', expr_form='glob'):
     Activate the named worker from the lbn load balancers at the targeted
     minions
 
-    Example::
+    Example:
+
+    .. code-block:: yaml
 
         disable-before-deploy:
           modjk_worker.activate:
@@ -210,7 +217,9 @@ def disable(name, lbn, target, profile='default', expr_form='glob'):
     The worker will get traffic only for current sessions and won't get new
     ones.
 
-    Example::
+    Example:
+
+    .. code-block:: yaml
 
         disable-before-deploy:
           modjk_worker.disable:

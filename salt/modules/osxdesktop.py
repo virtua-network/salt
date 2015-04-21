@@ -2,14 +2,21 @@
 '''
 Mac OS X implementations of various commands in the "desktop" interface
 '''
+from __future__ import absolute_import
+
+# Import salt libs
+import salt.utils
+
+# Define the module's virtual name
+__virtualname__ = 'desktop'
 
 
 def __virtual__():
     '''
     Only load on Mac systems
     '''
-    if __grains__['os'] == 'MacOS':
-        return 'desktop'
+    if salt.utils.is_darwin():
+        return __virtualname__
     return False
 
 
@@ -40,7 +47,7 @@ def set_output_volume(volume):
     '''
     cmd = 'osascript -e "set volume output volume {0}"'.format(volume)
 
-    __salt__['cmd.run'](cmd)
+    __salt__['cmd.run'](cmd, python_shell=False)
 
     return get_output_volume()
 
@@ -57,7 +64,7 @@ def screensaver():
     '''
     cmd = 'open /System/Library/Frameworks/ScreenSaver.framework/Versions/A/Resources/ScreenSaverEngine.app'
 
-    return __salt__['cmd.run'](cmd)
+    return __salt__['cmd.run'](cmd, python_shell=False)
 
 
 def lock():
@@ -72,7 +79,7 @@ def lock():
     '''
     cmd = '/System/Library/CoreServices/Menu\\ Extras/User.menu/Contents/Resources/CGSession -suspend'
 
-    return __salt__['cmd.run'](cmd)
+    return __salt__['cmd.run'](cmd, python_shell=False)
 
 
 def say(*words):
@@ -85,5 +92,5 @@ def say(*words):
 
         salt '*' desktop.say <word0> <word1> ... <wordN>
     '''
-    cmd = 'say {}'.format(' '.join(words))
-    return __salt__['cmd.run'](cmd)
+    cmd = 'say {0}'.format(' '.join(words))
+    return __salt__['cmd.run'](cmd, python_shell=False)

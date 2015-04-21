@@ -1,12 +1,17 @@
+# -*- coding: utf-8 -*-
+
 # Import Python libs
+from __future__ import absolute_import
 import os
 import sys
 import shutil
 import tempfile
+import textwrap
+import copy
 from cStringIO import StringIO
 
 # Import Salt Testing libs
-from salttesting import TestCase
+from salttesting.unit import TestCase
 from salttesting.helpers import ensure_in_syspath
 
 ensure_in_syspath('../')
@@ -15,28 +20,74 @@ ensure_in_syspath('../')
 import integration
 import salt.loader
 import salt.config
+import salt.utils
 from salt.state import HighState
 from salt.utils.pydsl import PyDslError
 
+
+# Import 3rd-party libs
+import salt.ext.six as six
+
+
 REQUISITES = ['require', 'require_in', 'use', 'use_in', 'watch', 'watch_in']
 
-OPTS = salt.config.minion_config(None)
-OPTS['state_events'] = False
-OPTS['id'] = 'whatever'
-OPTS['file_client'] = 'local'
-OPTS['file_roots'] = dict(base=['/tmp'])
-OPTS['test'] = False
-OPTS['grains'] = salt.loader.grains(OPTS)
 
-
-class PyDSLRendererTestCase(TestCase):
+class CommonTestCaseBoilerplate(TestCase):
 
     def setUp(self):
-        self.HIGHSTATE = HighState(OPTS)
+        self.root_dir = tempfile.mkdtemp(dir=integration.TMP)
+        self.state_tree_dir = os.path.join(self.root_dir, 'state_tree')
+        self.cache_dir = os.path.join(self.root_dir, 'cachedir')
+        if not os.path.isdir(self.root_dir):
+            os.makedirs(self.root_dir)
+
+        if not os.path.isdir(self.state_tree_dir):
+            os.makedirs(self.state_tree_dir)
+
+        if not os.path.isdir(self.cache_dir):
+            os.makedirs(self.cache_dir)
+        self.config = salt.config.minion_config(None)
+        self.config['root_dir'] = self.root_dir
+        self.config['state_events'] = False
+        self.config['id'] = 'match'
+        self.config['file_client'] = 'local'
+        self.config['file_roots'] = dict(base=[self.state_tree_dir])
+        self.config['cachedir'] = self.cache_dir
+        self.config['test'] = False
+        self.config['grains'] = salt.loader.grains(self.config)
+        self.HIGHSTATE = HighState(self.config)
         self.HIGHSTATE.push_active()
 
     def tearDown(self):
-        self.HIGHSTATE.pop_active()
+        try:
+            self.HIGHSTATE.pop_active()
+        except IndexError:
+            pass
+
+    def state_highstate(self, state, dirpath):
+        opts = copy.copy(self.config)
+        opts['file_roots'] = dict(base=[dirpath])
+        HIGHSTATE = HighState(opts)
+        HIGHSTATE.push_active()
+        try:
+            high, errors = HIGHSTATE.render_highstate(state)
+            if errors:
+                import pprint
+                pprint.pprint('\n'.join(errors))
+                pprint.pprint(high)
+
+            out = HIGHSTATE.state.call_high(high)
+            # pprint.pprint(out)
+        finally:
+            HIGHSTATE.pop_active()
+
+
+class PyDSLRendererTestCase(CommonTestCaseBoilerplate):
+    '''
+    WARNING: If tests in here are flaky, they may need
+    to be moved to their own class. Sharing HighState, especially
+    through setUp/tearDown can create dangerous race conditions!
+    '''
 
     def render_sls(self, content, sls='', env='base', **kws):
         return self.HIGHSTATE.state.rend['pydsl'](
@@ -44,15 +95,15 @@ class PyDSLRendererTestCase(TestCase):
         )
 
     def test_state_declarations(self):
-        result = self.render_sls('''
-state('A').cmd.run('ls -la', cwd='/var/tmp')
-state().file.managed('myfile.txt', source='salt://path/to/file')
-state('X').cmd('run', 'echo hello world', cwd='/')
+        result = self.render_sls(textwrap.dedent('''
+            state('A').cmd.run('ls -la', cwd='/var/tmp')
+            state().file.managed('myfile.txt', source='salt://path/to/file')
+            state('X').cmd('run', 'echo hello world', cwd='/')
 
-a_cmd = state('A').cmd
-a_cmd.run(shell='/bin/bash')
-state('A').service.running(name='apache')
-''')
+            a_cmd = state('A').cmd
+            a_cmd.run(shell='/bin/bash')
+            state('A').service.running(name='apache')
+        '''))
         self.assertTrue('A' in result and 'X' in result)
         A_cmd = result['A']['cmd']
         self.assertEqual(A_cmd[0], 'run')
@@ -75,29 +126,29 @@ state('A').service.running(name='apache')
         # 2 rather than 1 because pydsl adds an extra no-op state
         # declaration.
 
-        s_iter = result.itervalues()
+        s_iter = six.itervalues(result)
         try:
-            s = s_iter.next()['file']
+            s = next(s_iter)['file']
         except KeyError:
-            s = s_iter.next()['file']
+            s = next(s_iter)['file']
         self.assertEqual(s[0], 'managed')
         self.assertEqual(s[1]['name'], 'myfile.txt')
         self.assertEqual(s[2]['source'], 'salt://path/to/file')
 
     def test_requisite_declarations(self):
-        result = self.render_sls('''
-state('X').cmd.run('echo hello')
-state('A').cmd.run('mkdir tmp', cwd='/var')
-state('B').cmd.run('ls -la', cwd='/var/tmp') \
-              .require(state('X').cmd) \
-              .require(cmd='A') \
-              .watch(service='G')
-state('G').service.running(name='collectd')
-state('G').service.watch_in(state('A').cmd)
+        result = self.render_sls(textwrap.dedent('''
+            state('X').cmd.run('echo hello')
+            state('A').cmd.run('mkdir tmp', cwd='/var')
+            state('B').cmd.run('ls -la', cwd='/var/tmp') \
+                        .require(state('X').cmd) \
+                        .require(cmd='A') \
+                        .watch(service='G')
+            state('G').service.running(name='collectd')
+            state('G').service.watch_in(state('A').cmd)
 
-state('H').cmd.require_in(cmd='echo hello')
-state('H').cmd.run('echo world')
-''')
+            state('H').cmd.require_in(cmd='echo hello')
+            state('H').cmd.run('echo world')
+        '''))
         self.assertTrue(len(result), 6)
         self.assertTrue(set("X A B G H".split()).issubset(set(result.keys())))
         b = result['B']['cmd']
@@ -113,22 +164,22 @@ state('H').cmd.run('echo world')
         )
 
     def test_include_extend(self):
-        result = self.render_sls('''
-include(
-    'some.sls.file',
-    'another.sls.file',
-    'more.sls.file',
-    delayed=True
-)
-A = state('A').cmd.run('echo hoho', cwd='/')
-state('B').cmd.run('echo hehe', cwd='/')
-extend(
-    A,
-    state('X').cmd.run(cwd='/a/b/c'),
-    state('Y').file('managed', name='a_file.txt'),
-    state('Z').service.watch(file='A')
-)
-''')
+        result = self.render_sls(textwrap.dedent('''
+            include(
+                'some.sls.file',
+                'another.sls.file',
+                'more.sls.file',
+                delayed=True
+            )
+            A = state('A').cmd.run('echo hoho', cwd='/')
+            state('B').cmd.run('echo hehe', cwd='/')
+            extend(
+                A,
+                state('X').cmd.run(cwd='/a/b/c'),
+                state('Y').file('managed', name='a_file.txt'),
+                state('Z').service.watch(file='A')
+            )
+        '''))
         self.assertEqual(len(result), 4)
         self.assertEqual(
             result['include'],
@@ -148,63 +199,64 @@ extend(
         self.assertEqual(extend['A']['cmd'][0], 'run')
 
     def test_cmd_call(self):
-        result = self.HIGHSTATE.state.call_template_str('''#!pydsl
-state('A').cmd.run('echo this is state A', cwd='/')
+        result = self.HIGHSTATE.state.call_template_str(textwrap.dedent('''\
+            #!pydsl
+            state('A').cmd.run('echo this is state A', cwd='/')
 
-some_var = 12345
-def do_something(a, b, *args, **kws):
-    return dict(result=True, changes={'a': a, 'b': b, 'args': args, 'kws': kws, 'some_var': some_var})
+            some_var = 12345
+            def do_something(a, b, *args, **kws):
+                return dict(result=True, changes={'a': a, 'b': b, 'args': args, 'kws': kws, 'some_var': some_var})
 
-state('C').cmd.call(do_something, 1, 2, 3, x=1, y=2) \
-              .require(state('A').cmd)
+            state('C').cmd.call(do_something, 1, 2, 3, x=1, y=2) \
+                          .require(state('A').cmd)
 
-state('G').cmd.wait('echo this is state G', cwd='/') \
-              .watch(state('C').cmd)
-''')
-        ret = (result[k] for k in result.keys() if 'do_something' in k).next()
+            state('G').cmd.wait('echo this is state G', cwd='/') \
+                          .watch(state('C').cmd)
+        '''))
+        ret = next(result[k] for k in six.iterkeys(result) if 'do_something' in k)
         changes = ret['changes']
         self.assertEqual(
             changes,
             dict(a=1, b=2, args=(3,), kws=dict(x=1, y=2), some_var=12345)
         )
 
-        ret = (result[k] for k in result.keys() if '-G_' in k).next()
+        ret = next(result[k] for k in six.iterkeys(result) if '-G_' in k)
         self.assertEqual(ret['changes']['stdout'], 'this is state G')
 
     def test_multiple_state_func_in_state_mod(self):
         with self.assertRaisesRegexp(PyDslError, 'Multiple state functions'):
-            self.render_sls('''
-state('A').cmd.run('echo hoho')
-state('A').cmd.wait('echo hehe')
-''')
+            self.render_sls(textwrap.dedent('''
+                state('A').cmd.run('echo hoho')
+                state('A').cmd.wait('echo hehe')
+            '''))
 
     def test_no_state_func_in_state_mod(self):
         with self.assertRaisesRegexp(PyDslError, 'No state function specified'):
-            self.render_sls('''
-state('B').cmd.require(cmd='hoho')
-''')
+            self.render_sls(textwrap.dedent('''
+                state('B').cmd.require(cmd='hoho')
+            '''))
 
     def test_load_highstate(self):
-        result = self.render_sls('''
-import yaml
-__pydsl__.load_highstate(yaml.load("""
-A:
-  cmd.run:
-    - name: echo hello
-    - cwd: /
-B:
-  pkg:
-    - installed
-  service:
-    - running
-    - require:
-      - pkg: B
-    - watch:
-      - cmd: A
-"""))
+        result = self.render_sls(textwrap.dedent('''
+            import yaml
+            __pydsl__.load_highstate(yaml.load("""
+            A:
+              cmd.run:
+                - name: echo hello
+                - cwd: /
+            B:
+              pkg:
+                - installed
+              service:
+                - running
+                - require:
+                  - pkg: B
+                - watch:
+                  - cmd: A
+            """))
 
-state('A').cmd.run(name='echo hello world')
-''')
+            state('A').cmd.run(name='echo hello world')
+            '''))
         self.assertEqual(len(result), 3)
         self.assertEqual(result['A']['cmd'][0], 'run')
         self.assertEqual(result['A']['cmd'][1]['name'], 'echo hello')
@@ -219,15 +271,15 @@ state('A').cmd.run(name='echo hello world')
         self.assertEqual(result['B']['service'][2]['watch'][0]['cmd'], 'A')
 
     def test_ordered_states(self):
-        result = self.render_sls('''
-__pydsl__.set(ordered=True)
-A = state('A')
-state('B').cmd.run('echo bbbb')
-A.cmd.run('echo aaa')
-state('B').cmd.run(cwd='/')
-state('C').cmd.run('echo ccc')
-state('B').file.managed(source='/a/b/c')
-''')
+        result = self.render_sls(textwrap.dedent('''
+            __pydsl__.set(ordered=True)
+            A = state('A')
+            state('B').cmd.run('echo bbbb')
+            A.cmd.run('echo aaa')
+            state('B').cmd.run(cwd='/')
+            state('C').cmd.run('echo ccc')
+            state('B').file.managed(source='/a/b/c')
+            '''))
         self.assertEqual(len(result['B']['cmd']), 3)
         self.assertEqual(result['A']['cmd'][1]['require'][0]['cmd'], 'B')
         self.assertEqual(result['C']['cmd'][1]['require'][0]['cmd'], 'A')
@@ -243,144 +295,51 @@ state('B').file.managed(source='/a/b/c')
             )
         output = os.path.join(dirpath, 'output')
         try:
-            write_to(os.path.join(dirpath, 'xxx.sls'),
-'''#!stateconf -os yaml . jinja
-.X:
-  cmd.run:
-    - name: echo X >> {0}
-    - cwd: /
-.Y:
-  cmd.run:
-    - name: echo Y >> {1}
-    - cwd: /
-.Z:
-  cmd.run:
-    - name: echo Z >> {2}
-    - cwd: /
-'''.format(output, output, output))
-            write_to(os.path.join(dirpath, 'yyy.sls'),
-'''#!pydsl|stateconf -ps
+            write_to(os.path.join(dirpath, 'xxx.sls'), textwrap.dedent(
+                '''#!stateconf -os yaml . jinja
+                .X:
+                  cmd.run:
+                    - name: echo X >> {0}
+                    - cwd: /
+                .Y:
+                  cmd.run:
+                    - name: echo Y >> {1}
+                    - cwd: /
+                .Z:
+                  cmd.run:
+                    - name: echo Z >> {2}
+                    - cwd: /
+                '''.format(output, output, output)))
+            write_to(os.path.join(dirpath, 'yyy.sls'), textwrap.dedent('''\
+                #!pydsl|stateconf -ps
 
-__pydsl__.set(ordered=True)
-state('.D').cmd.run('echo D >> {0}', cwd='/')
-state('.E').cmd.run('echo E >> {1}', cwd='/')
-state('.F').cmd.run('echo F >> {2}', cwd='/')
-'''.format(output, output, output))
+                __pydsl__.set(ordered=True)
+                state('.D').cmd.run('echo D >> {0}', cwd='/')
+                state('.E').cmd.run('echo E >> {1}', cwd='/')
+                state('.F').cmd.run('echo F >> {2}', cwd='/')
+                '''.format(output, output, output)))
 
-            write_to(os.path.join(dirpath, 'aaa.sls'),
-'''#!pydsl|stateconf -ps
+            write_to(os.path.join(dirpath, 'aaa.sls'), textwrap.dedent('''\
+                #!pydsl|stateconf -ps
 
-include('xxx', 'yyy')
+                include('xxx', 'yyy')
 
-# make all states in xxx run BEFORE states in this sls.
-extend(state('.start').stateconf.require(stateconf='xxx::goal'))
+                # make all states in xxx run BEFORE states in this sls.
+                extend(state('.start').stateconf.require(stateconf='xxx::goal'))
 
-# make all states in yyy run AFTER this sls.
-extend(state('.goal').stateconf.require_in(stateconf='yyy::start'))
+                # make all states in yyy run AFTER this sls.
+                extend(state('.goal').stateconf.require_in(stateconf='yyy::start'))
 
-__pydsl__.set(ordered=True)
+                __pydsl__.set(ordered=True)
 
-state('.A').cmd.run('echo A >> {0}', cwd='/')
-state('.B').cmd.run('echo B >> {1}', cwd='/')
-state('.C').cmd.run('echo C >> {2}', cwd='/')
-'''.format(output, output, output))
+                state('.A').cmd.run('echo A >> {0}', cwd='/')
+                state('.B').cmd.run('echo B >> {1}', cwd='/')
+                state('.C').cmd.run('echo C >> {2}', cwd='/')
+                '''.format(output, output, output)))
 
-            state_highstate({'base': ['aaa']}, dirpath)
-            with open(output, 'r') as f:
+            self.state_highstate({'base': ['aaa']}, dirpath)
+            with salt.utils.fopen(output, 'r') as f:
                 self.assertEqual(''.join(f.read().split()), "XYZABCDEF")
-
-        finally:
-            shutil.rmtree(dirpath, ignore_errors=True)
-
-    def test_rendering_includes(self):
-        dirpath = tempfile.mkdtemp(dir=integration.SYS_TMP_DIR)
-        if not os.path.isdir(dirpath):
-            self.skipTest(
-                'The temporary directory {0!r} was not created'.format(
-                    dirpath
-                )
-            )
-        output = os.path.join(dirpath, 'output')
-        try:
-            write_to(os.path.join(dirpath, 'aaa.sls'),
-'''#!pydsl|stateconf -ps
-
-include('xxx')
-yyy = include('yyy')
-
-# ensure states in xxx are run first, then those in yyy and then those in aaa last.
-extend(state('yyy::start').stateconf.require(stateconf='xxx::goal'))
-extend(state('.start').stateconf.require(stateconf='yyy::goal'))
-
-extend(state('yyy::Y2').cmd.run('echo Y2 extended >> {0}'))
-
-__pydsl__.set(ordered=True)
-
-yyy.hello('red', 1)
-yyy.hello('green', 2)
-yyy.hello('blue', 3)
-'''.format(output))
-
-            write_to(os.path.join(dirpath, 'xxx.sls'),
-'''#!stateconf -os yaml . jinja
-
-include:
-  - yyy
-
-extend:
-  yyy::start:
-    stateconf.set:
-      - require:
-        - stateconf: .goal
-
-  yyy::Y1:
-    cmd.run:
-      - name: 'echo Y1 extended >> {0}'
-
-.X1:
-  cmd.run:
-    - name: echo X1 >> {1}
-    - cwd: /
-.X2:
-  cmd.run:
-    - name: echo X2 >> {2}
-    - cwd: /
-.X3:
-  cmd.run:
-    - name: echo X3 >> {3}
-    - cwd: /
-
-'''.format(output, output, output, output))
-
-            write_to(os.path.join(dirpath, 'yyy.sls'),
-'''#!pydsl|stateconf -ps
-
-include('xxx')
-__pydsl__.set(ordered=True)
-
-state('.Y1').cmd.run('echo Y1 >> {0}', cwd='/')
-state('.Y2').cmd.run('echo Y2 >> {1}', cwd='/')
-state('.Y3').cmd.run('echo Y3 >> {2}', cwd='/')
-
-def hello(color, number):
-    state(color).cmd.run('echo hello '+color+' '+str(number)+' >> {3}', cwd='/')
-'''.format(output, output, output, output))
-
-            state_highstate({'base': ['aaa']}, dirpath)
-            expected = '''
-X1
-X2
-X3
-Y1 extended
-Y2 extended
-Y3
-hello red 1
-hello green 2
-hello blue 3
-'''.lstrip()
-
-            with open(output, 'r') as f:
-                self.assertEqual(sorted(f.read()), sorted(expected))
 
         finally:
             shutil.rmtree(dirpath, ignore_errors=True)
@@ -396,26 +355,26 @@ hello blue 3
                 )
             )
         try:
-            write_to(os.path.join(dirpath, 'aaa.sls'),
-'''#!pydsl
+            write_to(os.path.join(dirpath, 'aaa.sls'), textwrap.dedent('''\
+                #!pydsl
 
-__pydsl__.set(ordered=True)
-A = state('A')
-A.cmd.run('echo hehe > {0}/zzz.txt', cwd='/')
-A.file.managed('{1}/yyy.txt', source='salt://zzz.txt')
-A()
-A()
+                __pydsl__.set(ordered=True)
+                A = state('A')
+                A.cmd.run('echo hehe > {0}/zzz.txt', cwd='/')
+                A.file.managed('{1}/yyy.txt', source='salt://zzz.txt')
+                A()
+                A()
 
-state().cmd.run('echo hoho >> {2}/yyy.txt', cwd='/')
+                state().cmd.run('echo hoho >> {2}/yyy.txt', cwd='/')
 
-A.file.managed('{3}/xxx.txt', source='salt://zzz.txt')
-A()
-'''.format(dirpath, dirpath, dirpath, dirpath))
-            state_highstate({'base': ['aaa']}, dirpath)
-            with open(os.path.join(dirpath, 'yyy.txt'), 'r') as f:
+                A.file.managed('{3}/xxx.txt', source='salt://zzz.txt')
+                A()
+                '''.format(dirpath, dirpath, dirpath, dirpath)))
+            self.state_highstate({'base': ['aaa']}, dirpath)
+            with salt.utils.fopen(os.path.join(dirpath, 'yyy.txt'), 'r') as f:
 
                 self.assertEqual(f.read(), 'hehe\nhoho\n')
-            with open(os.path.join(dirpath, 'xxx.txt'), 'r') as f:
+            with salt.utils.fopen(os.path.join(dirpath, 'xxx.txt'), 'r') as f:
                 self.assertEqual(f.read(), 'hehe\n')
         finally:
             shutil.rmtree(dirpath, ignore_errors=True)
@@ -430,49 +389,162 @@ A()
             )
         output = os.path.join(dirpath, 'output')
         try:
-            write_to(os.path.join(dirpath, 'aaa.sls'),
-'''#!pydsl
-__salt__['state.sls']('bbb')
-state().cmd.run('echo bbbbbb', cwd='/')
-''')
-            write_to(os.path.join(dirpath, 'bbb.sls'),
-'''
-# {{ salt['state.sls']('ccc')
-test:
-  cmd.run:
-    - name: echo bbbbbbb
-    - cwd: /
-''')
-            write_to(os.path.join(dirpath, 'ccc.sls'),
-'''
-#!pydsl
-state().cmd.run('echo ccccc', cwd='/')
-''')
-            state_highstate({'base': ['aaa']}, dirpath)
+            write_to(os.path.join(dirpath, 'aaa.sls'), textwrap.dedent('''\
+                #!pydsl
+                __salt__['state.sls']('bbb')
+                state().cmd.run('echo bbbbbb', cwd='/')
+                '''))
+            write_to(os.path.join(dirpath, 'bbb.sls'), textwrap.dedent(
+                '''
+                # {{ salt['state.sls']('ccc') }}
+                test:
+                  cmd.run:
+                    - name: echo bbbbbbb
+                    - cwd: /
+                '''))
+            write_to(os.path.join(dirpath, 'ccc.sls'), textwrap.dedent(
+                '''
+                #!pydsl
+                state().cmd.run('echo ccccc', cwd='/')
+                '''))
+            self.state_highstate({'base': ['aaa']}, dirpath)
+        finally:
+            shutil.rmtree(dirpath, ignore_errors=True)
+
+    def test_repeat_includes(self):
+        dirpath = tempfile.mkdtemp(dir=integration.SYS_TMP_DIR)
+        if not os.path.isdir(dirpath):
+            self.skipTest(
+                'The temporary directory {0!r} was not created'.format(
+                    dirpath
+                )
+            )
+        output = os.path.join(dirpath, 'output')
+        try:
+            write_to(os.path.join(dirpath, 'b.sls'), textwrap.dedent('''\
+                #!pydsl
+                include('c')
+                include('d')
+                '''))
+            write_to(os.path.join(dirpath, 'c.sls'), textwrap.dedent('''\
+                #!pydsl
+                modtest = include('e')
+                modtest.success
+                '''))
+            write_to(os.path.join(dirpath, 'd.sls'), textwrap.dedent('''\
+                #!pydsl
+                modtest = include('e')
+                modtest.success
+                '''))
+            write_to(os.path.join(dirpath, 'e.sls'), textwrap.dedent('''\
+                #!pydsl
+                success = True
+                '''))
+            self.state_highstate({'base': ['b']}, dirpath)
+            self.state_highstate({'base': ['c', 'd']}, dirpath)
+        finally:
+            shutil.rmtree(dirpath, ignore_errors=True)
+
+
+class PyDSLRendererIncludeTestCase(CommonTestCaseBoilerplate):
+
+    def test_rendering_includes(self):
+        dirpath = tempfile.mkdtemp(dir=integration.SYS_TMP_DIR)
+        if not os.path.isdir(dirpath):
+            self.skipTest(
+                'The temporary directory {0!r} was not created'.format(
+                    dirpath
+                )
+            )
+        output = os.path.join(dirpath, 'output')
+        try:
+            write_to(os.path.join(dirpath, 'aaa.sls'), textwrap.dedent('''\
+                #!pydsl|stateconf -ps
+
+                include('xxx')
+                yyy = include('yyy')
+
+                # ensure states in xxx are run first, then those in yyy and then those in aaa last.
+                extend(state('yyy::start').stateconf.require(stateconf='xxx::goal'))
+                extend(state('.start').stateconf.require(stateconf='yyy::goal'))
+
+                extend(state('yyy::Y2').cmd.run('echo Y2 extended >> {0}'))
+
+                __pydsl__.set(ordered=True)
+
+                yyy.hello('red', 1)
+                yyy.hello('green', 2)
+                yyy.hello('blue', 3)
+                '''.format(output)))
+
+            write_to(os.path.join(dirpath, 'xxx.sls'), textwrap.dedent('''\
+                #!stateconf -os yaml . jinja
+
+                include:
+                  - yyy
+
+                extend:
+                  yyy::start:
+                    stateconf.set:
+                      - require:
+                        - stateconf: .goal
+
+                  yyy::Y1:
+                    cmd.run:
+                      - name: 'echo Y1 extended >> {0}'
+
+                .X1:
+                  cmd.run:
+                    - name: echo X1 >> {1}
+                    - cwd: /
+                .X2:
+                  cmd.run:
+                    - name: echo X2 >> {2}
+                    - cwd: /
+                .X3:
+                  cmd.run:
+                    - name: echo X3 >> {3}
+                    - cwd: /
+
+                '''.format(output, output, output, output)))
+
+            write_to(os.path.join(dirpath, 'yyy.sls'), textwrap.dedent('''\
+                #!pydsl|stateconf -ps
+
+                include('xxx')
+                __pydsl__.set(ordered=True)
+
+                state('.Y1').cmd.run('echo Y1 >> {0}', cwd='/')
+                state('.Y2').cmd.run('echo Y2 >> {1}', cwd='/')
+                state('.Y3').cmd.run('echo Y3 >> {2}', cwd='/')
+
+                def hello(color, number):
+                    state(color).cmd.run('echo hello '+color+' '+str(number)+' >> {3}', cwd='/')
+                '''.format(output, output, output, output)))
+
+            self.state_highstate({'base': ['aaa']}, dirpath)
+            expected = textwrap.dedent('''\
+                X1
+                X2
+                X3
+                Y1 extended
+                Y2 extended
+                Y3
+                hello red 1
+                hello green 2
+                hello blue 3
+                ''')
+
+            with salt.utils.fopen(output, 'r') as f:
+                self.assertEqual(sorted(f.read()), sorted(expected))
+
         finally:
             shutil.rmtree(dirpath, ignore_errors=True)
 
 
 def write_to(fpath, content):
-    with open(fpath, 'w') as f:
+    with salt.utils.fopen(fpath, 'w') as f:
         f.write(content)
-
-
-def state_highstate(matches, dirpath):
-    OPTS['file_roots'] = dict(base=[dirpath])
-    HIGHSTATE = HighState(OPTS)
-    HIGHSTATE.push_active()
-    try:
-        high, errors = HIGHSTATE.render_highstate({'base': ['aaa']})
-        if errors:
-            import pprint
-            pprint.pprint('\n'.join(errors))
-            pprint.pprint(high)
-
-        out = HIGHSTATE.state.call_high(high)
-        # pprint.pprint(out)
-    finally:
-        HIGHSTATE.pop_active()
 
 
 if __name__ == '__main__':

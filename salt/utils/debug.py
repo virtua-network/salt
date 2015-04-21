@@ -2,6 +2,7 @@
 '''
 Print a stacktrace when sent a SIGUSR1 for debugging
 '''
+from __future__ import absolute_import
 
 # Import python libs
 import os
@@ -10,6 +11,7 @@ import time
 import signal
 import tempfile
 import traceback
+import inspect
 
 # Import salt libs
 import salt.utils
@@ -41,12 +43,92 @@ def _handle_sigusr1(sig, stack):
             _makepretty(output, stack)
 
 
+def _handle_sigusr2(sig, stack):
+    '''
+    Signal handler for SIGUSR2, only available on Unix-like systems
+    '''
+    try:
+        import yappi
+    except ImportError:
+        return
+    if yappi.is_running():
+        yappi.stop()
+        filename = 'callgrind.salt-{0}-{1}'.format(int(time.time()), os.getpid())
+        destfile = os.path.join(tempfile.gettempdir(), filename)
+        yappi.get_func_stats().save(destfile, type='CALLGRIND')
+        if sys.stderr.isatty():
+            sys.stderr.write('Saved profiling data to: {0}\n'.format(destfile))
+        yappi.clear_stats()
+    else:
+        if sys.stderr.isatty():
+            sys.stderr.write('Profiling started\n')
+        yappi.start()
+
+
+def enable_sig_handler(signal_name, handler):
+    '''
+    Add signal handler for signal name if it exists on given platform
+    '''
+    if hasattr(signal, signal_name):
+        signal.signal(getattr(signal, signal_name), handler)
+
+
 def enable_sigusr1_handler():
     '''
     Pretty print a stack trace to the console or a debug log under /tmp
     when any of the salt daemons such as salt-master are sent a SIGUSR1
     '''
-    #  Skip setting up this signal on Windows
-    #  SIGUSR1 doesn't exist on Windows and causes the minion to crash
-    if not salt.utils.is_windows():
-        signal.signal(signal.SIGUSR1, _handle_sigusr1)
+    enable_sig_handler('SIGUSR1', _handle_sigusr1)
+    # Also canonical BSD-way of printing progress is SIGINFO
+    # which on BSD-derivatives can be sent via Ctrl+T
+    enable_sig_handler('SIGINFO', _handle_sigusr1)
+
+
+def enable_sigusr2_handler():
+    '''
+    Toggle YAPPI profiler
+    '''
+    enable_sig_handler('SIGUSR2', _handle_sigusr2)
+
+
+def inspect_stack():
+    '''
+    Return a string of which function we are currently in.
+    '''
+    return {'co_name': inspect.stack()[1][3]}
+
+
+def caller_name(skip=2):
+    '''
+    Get a name of a caller in the format module.class.method
+
+    `skip` specifies how many levels of stack to skip while getting caller
+    name. skip=1 means "who calls me", skip=2 "who calls my caller" etc.
+
+    An empty string is returned if skipped levels exceed stack height
+
+    Source: https://gist.github.com/techtonik/2151727
+    '''
+    stack = inspect.stack()
+    start = 0 + skip
+    if len(stack) < start + 1:
+        return ''
+    parentframe = stack[start][0]
+
+    name = []
+    module = inspect.getmodule(parentframe)
+    # `modname` can be None when frame is executed directly in console
+    # TODO(techtonik): consider using __main__
+    if module:
+        name.append(module.__name__)
+    # detect classname
+    if 'self' in parentframe.f_locals:
+        # I don't know any way to detect call from the object method
+        # XXX: there seems to be no way to detect static method call - it will
+        #      be just a function call
+        name.append(parentframe.f_locals['self'].__class__.__name__)
+    codename = parentframe.f_code.co_name
+    if codename != '<module>':  # top level usually
+        name.append(codename)   # function or a method
+    del parentframe
+    return ".".join(name)

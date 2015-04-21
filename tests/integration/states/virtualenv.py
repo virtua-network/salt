@@ -1,8 +1,6 @@
 # -*- coding: utf-8 -*-
 '''
     :codeauthor: :email:`Pedro Algarvio (pedro@algarvio.me)`
-    :copyright: © 2012-2013 by the SaltStack Team, see AUTHORS for more details
-    :license: Apache 2.0, see LICENSE for more details.
 
 
     tests.integration.states.virtualenv
@@ -10,6 +8,7 @@
 '''
 
 # Import python libs
+from __future__ import absolute_import
 import os
 import shutil
 
@@ -20,16 +19,13 @@ ensure_in_syspath('../../')
 
 # Import salt libs
 import integration
+import salt.utils
+from salt.modules.virtualenv_mod import KNOWN_BINARY_NAMES
 
 
+@skipIf(salt.utils.which_bin(KNOWN_BINARY_NAMES) is None, 'virtualenv not installed')
 class VirtualenvTest(integration.ModuleCase,
                      integration.SaltReturnAssertsMixIn):
-    def setUp(self):
-        super(VirtualenvTest, self).setUp()
-        ret = self.run_function('cmd.has_exec', ['virtualenv'])
-        if not ret:
-            self.skipTest('virtualenv not installed')
-
     @destructiveTest
     @skipIf(os.geteuid() != 0, 'you must be root to run this test')
     def test_issue_1959_virtualenv_runas(self):
@@ -82,7 +78,8 @@ class VirtualenvTest(integration.ModuleCase,
         ]
 
         # Let's populate the requirements file, just pep-8 for now
-        open(requirements_file_path, 'a').write('pep8==1.3.3\n')
+        with salt.utils.fopen(requirements_file_path, 'a') as fhw:
+            fhw.write('pep8==1.3.3\n')
 
         # Let's run our state!!!
         try:
@@ -109,7 +106,8 @@ class VirtualenvTest(integration.ModuleCase,
         self.assertNotIn('zope.interface==4.0.1', ret)
 
         # Now let's update the requirements file, which is now cached.
-        open(requirements_file_path, 'w').write('zope.interface==4.0.1\n')
+        with salt.utils.fopen(requirements_file_path, 'w') as fhw:
+            fhw.write('zope.interface==4.0.1\n')
 
         # Let's run our state!!!
         try:

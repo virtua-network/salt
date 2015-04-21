@@ -1,6 +1,9 @@
 # -*- coding: utf-8 -*-
 '''
-Manage RabbitMQ Users.
+Manage RabbitMQ Users
+=====================
+
+Example:
 
 .. code-block:: yaml
 
@@ -8,10 +11,26 @@ Manage RabbitMQ Users.
         rabbitmq_user.present:
             - password: password
             - force: True
+            - tags:
+                - monitoring
+                - user
+            - perms:
+              - '/':
+                - '.*'
+                - '.*'
+                - '.*'
+            - runas: rabbitmq
 '''
 
 # Import python libs
+from __future__ import absolute_import
 import logging
+
+# Import salt libs
+import salt.utils
+
+# Import 3rd-party libs
+import salt.ext.six as six
 
 log = logging.getLogger(__name__)
 
@@ -20,16 +39,15 @@ def __virtual__():
     '''
     Only load if RabbitMQ is installed.
     '''
-    name = 'rabbitmq_user'
-    if not __salt__['cmd.has_exec']('rabbitmqctl'):
-        name = False
-    return name
+    return salt.utils.which('rabbitmqctl') is not None
 
 
 def present(name,
-           password=None,
-           force=False,
-           runas=None):
+            password=None,
+            force=False,
+            tags=None,
+            perms=(),
+            runas=None):
     '''
     Ensure the RabbitMQ user exists.
 
@@ -39,9 +57,14 @@ def present(name,
         User's password, if one needs to be set
     force
         If user exists, forcibly change the password
+    tags
+        Optional list of tags for the user
+    perms
+        A list of dicts with vhost keys and 3-tuple values
     runas
         Name of the user to run the command
     '''
+
     ret = {'name': name, 'result': True, 'comment': '', 'changes': {}}
     result = {}
 
@@ -50,43 +73,79 @@ def present(name,
     if __opts__['test']:
         ret['result'] = None
 
-        if not user_exists:
-            ret['comment'] = 'User {0} is set to be created'
-        elif force:
-            ret['comment'] = 'User {0} is set to be updated'
+        if user_exists:
+            if force:
+                ret['comment'] = 'User {0} is set to be updated'
+            else:
+                ret['comment'] = 'User {0} already presents'
         else:
-            ret['comment'] = 'User {0} is not going to be modified'
+            ret['comment'] = 'User {0} is set to be created'
+
         ret['comment'] = ret['comment'].format(name)
+        return ret
+
+    if user_exists and not force:
+        log.debug('User exists, and force is not set - Abandoning')
+        ret['comment'] = 'User {0} already presents'.format(name)
+        return ret
     else:
+        changes = {'old': '', 'new': ''}
+
+        # Get it into the correct format
+        if tags and isinstance(tags, (list, tuple)):
+            tags = ' '.join(tags)
+        if not tags:
+            tags = ''
+
+        def _set_tags_and_perms(tags, perms):
+            if tags:
+                result.update(__salt__['rabbitmq.set_user_tags'](
+                    name, tags, runas=runas)
+                )
+                changes['new'] += 'Set tags: {0}\n'.format(tags)
+            for element in perms:
+                for vhost, perm in six.iteritems(element):
+                    result.update(__salt__['rabbitmq.set_permissions'](
+                        vhost, name, perm[0], perm[1], perm[2], runas)
+                    )
+                    changes['new'] += (
+                        'Set permissions {0} for vhost {1}'
+                    ).format(perm, vhost)
+
         if not user_exists:
-            log.debug(
-                "User doesn't exist - Creating")
+            log.debug('User doesn\'t exist - Creating')
             result = __salt__['rabbitmq.add_user'](
                 name, password, runas=runas)
-        elif force:
-            log.debug('User exists and force is set - Overriding password')
+
+            _set_tags_and_perms(tags, perms)
+        else:
+            log.debug('RabbitMQ user exists and force is set - Overriding')
             if password is not None:
                 result = __salt__['rabbitmq.change_password'](
                     name, password, runas=runas)
+                changes['new'] = 'Set password.\n'
             else:
                 log.debug('Password is not set - Clearing password')
                 result = __salt__['rabbitmq.clear_password'](
                     name, runas=runas)
-        else:
-            log.debug('User exists, and force is not set - Abandoning')
-            ret['comment'] = 'User {0} is not going to be modified'.format(name)
+                changes['old'] += 'Removed password.\n'
+
+            _set_tags_and_perms(tags, perms)
 
         if 'Error' in result:
             ret['result'] = False
             ret['comment'] = result['Error']
         elif 'Added' in result:
             ret['comment'] = result['Added']
+            ret['changes'] = changes
         elif 'Password Changed' in result:
             ret['comment'] = result['Password Changed']
+            ret['changes'] = changes
         elif 'Password Cleared' in result:
             ret['comment'] = result['Password Cleared']
+            ret['changes'] = changes
 
-    return ret
+        return ret
 
 
 def absent(name,
@@ -103,21 +162,19 @@ def absent(name,
 
     user_exists = __salt__['rabbitmq.user_exists'](name, runas=runas)
 
-    if __opts__['test']:
+    if not user_exists:
+        ret['comment'] = 'User {0} is not present'.format(name)
+    elif __opts__['test']:
         ret['result'] = None
         if user_exists:
             ret['comment'] = 'Removing user {0}'.format(name)
-        else:
-            ret['comment'] = 'User {0} is not present'.format(name)
     else:
-        if user_exists:
-            result = __salt__['rabbitmq.delete_user'](name, runas=runas)
-            if 'Error' in result:
-                ret['result'] = False
-                ret['comment'] = result['Error']
-            elif 'Deleted' in result:
-                ret['comment'] = 'Deleted'
-        else:
-            ret['comment'] = 'User {0} is not present'.format(name)
+        result = __salt__['rabbitmq.delete_user'](name, runas=runas)
+        if 'Error' in result:
+            ret['result'] = False
+            ret['comment'] = result['Error']
+        elif 'Deleted' in result:
+            ret['comment'] = 'Deleted'
+            ret['changes'] = {'new': '', 'old': name}
 
     return ret

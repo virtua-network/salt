@@ -2,9 +2,7 @@
 '''
 Module for gathering and managing network information
 '''
-
-# Import python libs
-import re
+from __future__ import absolute_import
 
 # Import salt libs
 import salt.utils
@@ -17,9 +15,12 @@ except ImportError:
 
 # Import 3rd party libraries
 try:
-    import wmi
+    import wmi  # pylint: disable=W0611
 except ImportError:
     HAS_DEPENDENCIES = False
+
+# Define the module's virtual name
+__virtualname__ = 'network'
 
 
 def __virtual__():
@@ -27,7 +28,7 @@ def __virtual__():
     Only works on Windows systems
     '''
     if salt.utils.is_windows() and HAS_DEPENDENCIES is True:
-        return 'network'
+        return __virtualname__
     return False
 
 
@@ -41,8 +42,8 @@ def ping(host):
 
         salt '*' network.ping archlinux.org
     '''
-    cmd = 'ping -n 4 {0}'.format(salt.utils.network.sanitize_host(host))
-    return __salt__['cmd.run'](cmd)
+    cmd = ['ping', '-n', '4', salt.utils.network.sanitize_host(host)]
+    return __salt__['cmd.run'](cmd, python_shell=False)
 
 
 def netstat():
@@ -56,8 +57,8 @@ def netstat():
         salt '*' network.netstat
     '''
     ret = []
-    cmd = 'netstat -na'
-    lines = __salt__['cmd.run'](cmd).splitlines()
+    cmd = ['netstat', '-nao']
+    lines = __salt__['cmd.run'](cmd, python_shell=False).splitlines()
     for line in lines:
         comps = line.split()
         if line.startswith('  TCP'):
@@ -65,13 +66,15 @@ def netstat():
                 'local-address': comps[1],
                 'proto': comps[0],
                 'remote-address': comps[2],
-                'state': comps[3]})
+                'state': comps[3],
+                'program': comps[4]})
         if line.startswith('  UDP'):
             ret.append({
                 'local-address': comps[1],
                 'proto': comps[0],
                 'remote-address': comps[2],
-                'state': None})
+                'state': None,
+                'program': comps[3]})
     return ret
 
 
@@ -86,10 +89,10 @@ def traceroute(host):
         salt '*' network.traceroute archlinux.org
     '''
     ret = []
-    cmd = 'tracert {0}'.format(salt.utils.network.sanitize_host(host))
-    lines = __salt__['cmd.run'](cmd).splitlines()
+    cmd = ['tracert', salt.utils.network.sanitize_host(host)]
+    lines = __salt__['cmd.run'](cmd, python_shell=False).splitlines()
     for line in lines:
-        if not ' ' in line:
+        if ' ' not in line:
             continue
         if line.startswith('Trac'):
             continue
@@ -141,8 +144,8 @@ def nslookup(host):
     '''
     ret = []
     addresses = []
-    cmd = 'nslookup {0}'.format(salt.utils.network.sanitize_host(host))
-    lines = __salt__['cmd.run'](cmd).splitlines()
+    cmd = ['nslookup', salt.utils.network.sanitize_host(host)]
+    lines = __salt__['cmd.run'](cmd, python_shell=False).splitlines()
     for line in lines:
         if addresses:
             # We're in the last block listing addresses
@@ -174,8 +177,27 @@ def dig(host):
 
         salt '*' network.dig archlinux.org
     '''
-    cmd = 'dig {0}'.format(salt.utils.network.sanitize_host(host))
-    return __salt__['cmd.run'](cmd)
+    cmd = ['dig', salt.utils.network.sanitize_host(host)]
+    return __salt__['cmd.run'](cmd, python_shell=False)
+
+
+def interfaces_names():
+    '''
+    Return a list of all the interfaces names
+
+    CLI Example:
+
+    .. code-block:: bash
+
+        salt '*' network.interfaces_names
+    '''
+
+    ret = []
+    with salt.utils.winapi.Com():
+        c = wmi.WMI()
+        for iface in c.Win32_NetworkAdapter(NetEnabled=True):
+            ret.append(iface.NetConnectionID)
+    return ret
 
 
 def interfaces():

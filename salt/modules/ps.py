@@ -3,34 +3,104 @@
 A salt interface to psutil, a system and process library.
 See http://code.google.com/p/psutil.
 
-:depends:   - psutil Python module
+:depends:   - psutil Python module, version 0.3.0 or later
+            - python-utmp package (optional)
 '''
 
 # Import python libs
-import sys
+from __future__ import absolute_import
 import time
+import datetime
+
+# Import salt libs
+from salt.exceptions import SaltInvocationError, CommandExecutionError
 
 # Import third party libs
+import salt.ext.six as six
+# pylint: disable=import-error
 try:
     import psutil
+
     HAS_PSUTIL = True
+    PSUTIL2 = psutil.version_info >= (2, 0)
 except ImportError:
     HAS_PSUTIL = False
+# pylint: enable=import-error
 
 
 def __virtual__():
     if not HAS_PSUTIL:
         return False
 
-    # The python 2.6 version of psutil lacks several functions
-    # used in this salt module so instead of spaghetti  string
-    # code to try to bring sanity to everything, disable it.
+    # Functions and attributes used in this execution module seem to have been
+    # added as of psutil 0.3.0, from an inspection of the source code. Only
+    # make this module available if the version of psutil is >= 0.3.0. Note
+    # that this may need to be tweaked if we find post-0.3.0 versions which
+    # also have problems running the functions in this execution module, but
+    # most distributions have already moved to later versions (for example,
+    # as of Dec. 2013 EPEL is on 0.6.1, Debian 7 is on 0.5.1, etc.).
+    if psutil.version_info >= (0, 3, 0):
+        return True
+    return False
+
+
+def _get_proc_cmdline(proc):
+    '''
+    Returns the cmdline of a Process instance.
+
+    It's backward compatible with < 2.0 versions of psutil.
+    '''
+    return proc.cmdline() if PSUTIL2 else proc.cmdline
+
+
+def _get_proc_create_time(proc):
+    '''
+    Returns the create_time of a Process instance.
+
+    It's backward compatible with < 2.0 versions of psutil.
+    '''
+    return proc.create_time() if PSUTIL2 else proc.create_time
+
+
+def _get_proc_name(proc):
+    '''
+    Returns the name of a Process instance.
+
+    It's backward compatible with < 2.0 versions of psutil.
+    '''
+    ret = []
     try:
-        if sys.version_info[0] == 2 and sys.version_info[1] < 7:
-            return False
-    except Exception:
-        return False
-    return 'ps'
+        ret = proc.name() if PSUTIL2 else proc.name
+    except (psutil.NoSuchProcess, psutil.AccessDenied):
+        pass
+    return ret
+
+
+def _get_proc_status(proc):
+    '''
+    Returns the status of a Process instance.
+
+    It's backward compatible with < 2.0 versions of psutil.
+    '''
+    return proc.status() if PSUTIL2 else proc.status
+
+
+def _get_proc_username(proc):
+    '''
+    Returns the username of a Process instance.
+
+    It's backward compatible with < 2.0 versions of psutil.
+    '''
+    return proc.username() if PSUTIL2 else proc.username
+
+
+def _get_proc_pid(proc):
+    '''
+    Returns the pid of a Process instance.
+
+    It's backward compatible with < 2.0 versions of psutil.
+    '''
+    return proc.pid
 
 
 def top(num_processes=5, interval=3):
@@ -52,14 +122,17 @@ def top(num_processes=5, interval=3):
     for pid in psutil.get_pid_list():
         try:
             process = psutil.Process(pid)
+            user, system = process.get_cpu_times()
         except psutil.NoSuchProcess:
             continue
-        user, system = process.get_cpu_times()
         start_usage[process] = user + system
     time.sleep(interval)
     usage = set()
-    for process, start in start_usage.items():
-        user, system = process.get_cpu_times()
+    for process, start in six.iteritems(start_usage):
+        try:
+            user, system = process.get_cpu_times()
+        except psutil.NoSuchProcess:
+            continue
         now = user + system
         diff = now - start
         usage.add((diff, process))
@@ -67,17 +140,22 @@ def top(num_processes=5, interval=3):
     for idx, (diff, process) in enumerate(reversed(sorted(usage))):
         if num_processes and idx >= num_processes:
             break
-        if len(process.cmdline) == 0:
-            cmdline = [process.name]
+        if len(_get_proc_cmdline(process)) == 0:
+            cmdline = [_get_proc_name(process)]
         else:
-            cmdline = process.cmdline
+            cmdline = _get_proc_cmdline(process)
         info = {'cmd': cmdline,
-                'pid': process.pid,
-                'create_time': process.create_time}
-        for key, value in process.get_cpu_times()._asdict().items():
-            info['cpu.{0}'.format(key)] = value
-        for key, value in process.get_memory_info()._asdict().items():
-            info['mem.{0}'.format(key)] = value
+                'user': _get_proc_username(process),
+                'status': _get_proc_status(process),
+                'pid': _get_proc_pid(process),
+                'create_time': _get_proc_create_time(process),
+                'cpu': {},
+                'mem': {},
+        }
+        for key, value in six.iteritems(process.get_cpu_times()._asdict()):
+            info['cpu'][key] = value
+        for key, value in six.iteritems(process.get_memory_info()._asdict()):
+            info['mem'][key] = value
         result.append(info)
 
     return result
@@ -96,9 +174,35 @@ def get_pid_list():
     return psutil.get_pid_list()
 
 
+def proc_info(pid, attrs=None):
+    '''
+    Return a dictionary of information for a process id (PID).
+
+    CLI Example:
+
+    .. code-block:: bash
+
+        salt '*' ps.proc_info 2322
+        salt '*' ps.proc_info 2322 attrs='["pid", "name"]'
+
+    pid
+        PID of process to query.
+
+    attrs
+        Optional list of desired process attributes.  The list of possible
+        attributes can be found here:
+        http://pythonhosted.org/psutil/#psutil.Process
+    '''
+    try:
+        proc = psutil.Process(pid)
+        return proc.as_dict(attrs)
+    except (psutil.NoSuchProcess, psutil.AccessDenied, AttributeError) as exc:
+        raise CommandExecutionError(exc)
+
+
 def kill_pid(pid, signal=15):
     '''
-    Kill a proccess by PID.
+    Kill a process by PID.
 
     .. code-block:: bash
 
@@ -155,24 +259,24 @@ def pkill(pattern, user=None, signal=15, full=False):
 
     .. code-block:: bash
 
-        salt 'www.*' httpd signal=1
+        salt 'www.*' ps.pkill httpd signal=1
 
     Send SIGKILL to all bash processes owned by user 'tom':
 
     .. code-block:: bash
 
-        salt '*' bash signal=9 user=tom
+        salt '*' ps.pkill bash signal=9 user=tom
     '''
 
     killed = []
     for proc in psutil.process_iter():
-        name_match = pattern in ' '.join(proc.cmdline) if full \
-            else pattern in proc.name
-        user_match = True if user is None else user == proc.username
+        name_match = pattern in ' '.join(_get_proc_cmdline(proc)) if full \
+            else pattern in _get_proc_name(proc)
+        user_match = True if user is None else user == _get_proc_username(proc)
         if name_match and user_match:
             try:
                 proc.send_signal(signal)
-                killed.append(proc.pid)
+                killed.append(_get_proc_pid(proc))
             except psutil.NoSuchProcess:
                 pass
     if not killed:
@@ -208,22 +312,22 @@ def pgrep(pattern, user=None, full=False):
 
     .. code-block:: bash
 
-        salt 'www.*' httpd
+        salt 'www.*' ps.pgrep httpd
 
     Find all bash processes owned by user 'tom':
 
     .. code-block:: bash
 
-        salt '*' bash user=tom
+        salt '*' ps.pgrep bash user=tom
     '''
 
     procs = []
     for proc in psutil.process_iter():
-        name_match = pattern in ' '.join(proc.cmdline) if full \
-            else pattern in proc.name
-        user_match = True if user is None else user == proc.username
+        name_match = pattern in ' '.join(_get_proc_cmdline(proc)) if full \
+            else pattern in _get_proc_name(proc)
+        user_match = True if user is None else user == _get_proc_username(proc)
         if name_match and user_match:
-            procs.append(proc.pid)
+            procs.append(_get_proc_pid(proc))
     return procs or None
 
 
@@ -272,57 +376,48 @@ def cpu_times(per_cpu=False):
     return result
 
 
-def physical_memory_usage():
+def virtual_memory():
     '''
-    Return a dict that describes free and available physical memory.
+    .. versionadded:: 2014.7.0
 
-    CLI Examples:
+    Return a dict that describes statistics about system memory usage.
 
-    .. code-block:: bash
+    .. note::
 
-        salt '*' ps.physical_memory_usage
-    '''
-    return dict(psutil.phymem_usage()._asdict())
-
-
-def virtual_memory_usage():
-    '''
-    Return a dict that describes free and available memory, both physical
-    and virtual.
+        This function is only available in psutil version 0.6.0 and above.
 
     CLI Example:
 
     .. code-block:: bash
 
-        salt '*' ps.virtual_memory_usage
+        salt '*' ps.virtual_memory
     '''
-    return dict(psutil.virtmem_usage()._asdict())
+    if psutil.version_info < (0, 6, 0):
+        msg = 'virtual_memory is only available in psutil 0.6.0 or greater'
+        raise CommandExecutionError(msg)
+    return dict(psutil.virtual_memory()._asdict())
 
 
-def cached_physical_memory():
+def swap_memory():
     '''
-    Return the amount cached memory.
+    .. versionadded:: 2014.7.0
+
+    Return a dict that describes swap memory statistics.
+
+    .. note::
+
+        This function is only available in psutil version 0.6.0 and above.
 
     CLI Example:
 
     .. code-block:: bash
 
-        salt '*' ps.cached_physical_memory
+        salt '*' ps.swap_memory
     '''
-    return psutil.cached_phymem()
-
-
-def physical_memory_buffers():
-    '''
-    Return the amount of physical memory buffers.
-
-    CLI Example:
-
-    .. code-block:: bash
-
-        salt '*' ps.physical_memory_buffers
-    '''
-    return psutil.phymem_buffers()
+    if psutil.version_info < (0, 6, 0):
+        msg = 'swap_memory is only available in psutil 0.6.0 or greater'
+        raise CommandExecutionError(msg)
+    return dict(psutil.swap_memory()._asdict())
 
 
 def disk_partitions(all=False):
@@ -386,7 +481,12 @@ def total_physical_memory():
 
         salt '*' ps.total_physical_memory
     '''
-    return psutil.TOTAL_PHYMEM
+    try:
+        return psutil.virtual_memory().total
+    except AttributeError:
+        # TOTAL_PHYMEM is deprecated but with older psutil versions this is
+        # needed as a fallback.
+        return psutil.TOTAL_PHYMEM
 
 
 def num_cpus():
@@ -399,43 +499,122 @@ def num_cpus():
 
         salt '*' ps.num_cpus
     '''
-    return psutil.NUM_CPUS
+    try:
+        return psutil.cpu_count()
+    except AttributeError:
+        # NUM_CPUS is deprecated but with older psutil versions this is needed
+        # as a fallback.
+        return psutil.NUM_CPUS
 
 
-def boot_time():
+def boot_time(time_format=None):
     '''
     Return the boot time in number of seconds since the epoch began.
 
     CLI Example:
 
+    time_format
+        Optionally specify a `strftime`_ format string. Use
+        ``time_format='%c'`` to get a nicely-formatted locale specific date and
+        time (i.e. ``Fri May  2 19:08:32 2014``).
+
+        .. _strftime: https://docs.python.org/2/library/datetime.html#strftime-strptime-behavior
+
+        .. versionadded:: 2014.1.4
+
     .. code-block:: bash
 
         salt '*' ps.boot_time
     '''
-    return psutil.BOOT_TIME
+    try:
+        b_time = int(psutil.boot_time())
+    except AttributeError:
+        # get_boot_time() has been removed in newer psutil versions, and has
+        # been replaced by boot_time() which provides the same information.
+        b_time = int(psutil.get_boot_time())
+    if time_format:
+        # Load epoch timestamp as a datetime.datetime object
+        b_time = datetime.datetime.fromtimestamp(b_time)
+        try:
+            return b_time.strftime(time_format)
+        except TypeError as exc:
+            raise SaltInvocationError('Invalid format string: {0}'.format(exc))
+    return b_time
 
 
-def network_io_counters():
+def network_io_counters(interface=None):
     '''
-    Return network I/O statisitics.
+    Return network I/O statistics.
 
     CLI Example:
 
     .. code-block:: bash
 
         salt '*' ps.network_io_counters
+
+        salt '*' ps.network_io_counters interface=eth0
     '''
-    return dict(psutil.network_io_counters()._asdict())
+    if not interface:
+        return dict(psutil.network_io_counters()._asdict())
+    else:
+        stats = psutil.network_io_counters(pernic=True)
+        if interface in stats:
+            return dict(stats[interface]._asdict())
+        else:
+            return False
 
 
-def disk_io_counters():
+def disk_io_counters(device=None):
     '''
-    Return disk I/O statisitics.
+    Return disk I/O statistics.
 
     CLI Example:
 
     .. code-block:: bash
 
         salt '*' ps.disk_io_counters
+
+        salt '*' ps.disk_io_counters device=sda1
     '''
-    return dict(psutil.disk_io_counters()._asdict())
+    if not device:
+        return dict(psutil.disk_io_counters()._asdict())
+    else:
+        stats = psutil.disk_io_counters(perdisk=True)
+        if device in stats:
+            return dict(stats[device]._asdict())
+        else:
+            return False
+
+
+def get_users():
+    '''
+    Return logged-in users.
+
+    CLI Example:
+
+    .. code-block:: bash
+
+        salt '*' ps.get_users
+    '''
+    try:
+        recs = psutil.get_users()
+        return [dict(x._asdict()) for x in recs]
+    except AttributeError:
+        # get_users is only present in psutil > v0.5.0
+        # try utmp
+        try:
+            import utmp  # pylint: disable=import-error
+
+            result = []
+            while True:
+                rec = utmp.utmpaccess.getutent()
+                if rec is None:
+                    return result
+                elif rec[0] == 7:
+                    started = rec[8]
+                    if isinstance(started, tuple):
+                        started = started[0]
+                    result.append({'name': rec[4], 'terminal': rec[2],
+                                   'started': started, 'host': rec[5]})
+        except ImportError:
+            return False

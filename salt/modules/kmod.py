@@ -2,20 +2,24 @@
 '''
 Module to manage Linux kernel modules
 '''
+from __future__ import absolute_import
 
 # Import python libs
 import os
 import re
+import logging
 
 # Import salt libs
 import salt.utils
+
+log = logging.getLogger(__name__)
 
 
 def __virtual__():
     '''
     Only runs on Linux systems
     '''
-    return 'kmod' if __grains__['kernel'] == 'Linux' else False
+    return __grains__['kernel'] == 'Linux'
 
 
 def _new_mods(pre_mods, post_mods):
@@ -46,13 +50,6 @@ def _rm_mods(pre_mods, post_mods):
     return pre - post
 
 
-def _union_module(a, b):
-    '''
-    Return union of two list where duplicated items are only once
-    '''
-    return list(set(a) | set(b))
-
-
 def _get_modules_conf():
     '''
     Return location of modules config file.
@@ -81,12 +78,17 @@ def _set_persistent_module(mod):
     commented uncomment it.
     '''
     conf = _get_modules_conf()
+    if not os.path.exists(conf):
+        __salt__['file.touch'](conf)
     mod_name = _strip_module_name(mod)
-    if not mod_name or mod_name in mod_list(True) or mod_name not in available():
+    if not mod_name or mod_name in mod_list(True) or mod_name \
+            not in available():
         return set()
     escape_mod = re.escape(mod)
-    ## If module is commented only uncomment it
-    if __salt__['file.contains_regex_multiline'](conf, "^#[\t ]*{}[\t ]*$".format(escape_mod)):
+    # If module is commented only uncomment it
+    if __salt__['file.contains_regex_multiline'](conf,
+                                                 '^#[\t ]*{0}[\t ]*$'.format(
+                                                     escape_mod)):
         __salt__['file.uncomment'](conf, escape_mod)
     else:
         __salt__['file.append'](conf, mod)
@@ -104,9 +106,9 @@ def _remove_persistent_module(mod, comment):
         return set()
     escape_mod = re.escape(mod)
     if comment:
-        __salt__['file.comment'](conf, "^[\t ]*{}[\t ]?".format(escape_mod))
+        __salt__['file.comment'](conf, '^[\t ]*{0}[\t ]?'.format(escape_mod))
     else:
-        __salt__['file.sed'](conf, "^[\t ]*{}[\t ]?".format(escape_mod), '')
+        __salt__['file.sed'](conf, '^[\t ]*{0}[\t ]?'.format(escape_mod), '')
     return set([mod_name])
 
 
@@ -125,7 +127,7 @@ def available():
     for root, dirs, files in os.walk(mod_dir):
         for fn_ in files:
             if '.ko' in fn_:
-                ret.append(fn_[:fn_.index('.ko')])
+                ret.append(fn_[:fn_.index('.ko')].replace('-', '_'))
     return sorted(list(ret))
 
 
@@ -184,12 +186,17 @@ def mod_list(only_persist=False):
     '''
     mods = set()
     if only_persist:
-        with salt.utils.fopen(_get_modules_conf(), 'r') as modules_file:
-            for line in modules_file:
-                line = line.strip()
-                mod_name = _strip_module_name(line)
-                if not line.startswith('#') and mod_name:
-                    mods.add(mod_name)
+        conf = _get_modules_conf()
+        if os.path.exists(conf):
+            try:
+                with salt.utils.fopen(conf, 'r') as modules_file:
+                    for line in modules_file:
+                        line = line.strip()
+                        mod_name = _strip_module_name(line)
+                        if not line.startswith('#') and mod_name:
+                            mods.add(mod_name)
+            except IOError:
+                log.error('kmod module could not open modules file at {0}'.format(conf))
     else:
         for mod in lsmod():
             mods.add(mod['module'])
@@ -213,7 +220,8 @@ def load(mod, persist=False):
         salt '*' kmod.load kvm
     '''
     pre_mods = lsmod()
-    response = __salt__['cmd.run_all']('modprobe {0}'.format(mod))
+    response = __salt__['cmd.run_all']('modprobe {0}'.format(mod),
+                                       python_shell=False)
     if response['retcode'] == 0:
         post_mods = lsmod()
         mods = _new_mods(pre_mods, post_mods)
@@ -259,7 +267,7 @@ def remove(mod, persist=False, comment=True):
         salt '*' kmod.remove kvm
     '''
     pre_mods = lsmod()
-    __salt__['cmd.run_all']('modprobe -r {0}'.format(mod))
+    __salt__['cmd.run_all']('rmmod {0}'.format(mod), python_shell=False)
     post_mods = lsmod()
     mods = _rm_mods(pre_mods, post_mods)
     persist_mods = set()

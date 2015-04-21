@@ -2,6 +2,7 @@
 '''
 Module for managing timezone on Windows systems.
 '''
+from __future__ import absolute_import
 
 # Import python libs
 import salt.utils
@@ -448,13 +449,16 @@ LINTOWIN = {
     'Pacific/Wallis': 'UTC+12'
     }
 
+# Define the module's virtual name
+__virtualname__ = 'timezone'
+
 
 def __virtual__():
     '''
     Only load on windows
     '''
-    if salt.utils.is_windows():
-        return 'timezone'
+    if salt.utils.is_windows() and salt.utils.which('tzutil'):
+        return __virtualname__
     return False
 
 
@@ -468,7 +472,7 @@ def get_zone():
 
         salt '*' timezone.get_zone
     '''
-    winzone = __salt__['cmd.run']('tzutil /g')
+    winzone = __salt__['cmd.run'](['tzutil', '/g'], python_shell=False)
     for key in LINTOWIN:
         if LINTOWIN[key] == winzone:
             return key
@@ -487,9 +491,9 @@ def get_offset():
         salt '*' timezone.get_offset
     '''
     string = False
-    zone = __salt__['cmd.run']('tzutil /g')
+    zone = __salt__['cmd.run'](['tzutil', '/g'], python_shell=False)
     prev = ''
-    for line in __salt__['cmd.run']('tzutil /l').splitlines():
+    for line in __salt__['cmd.run'](['tzutil', '/l'], python_shell=False).splitlines():
         if zone == line:
             string = prev
             break
@@ -536,7 +540,8 @@ def set_zone(timezone):
 
         salt '*' timezone.set_zone 'America/Denver'
     '''
-    return __salt__['cmd.retcode']('tzutil /s "{0}"'.format(LINTOWIN[timezone])) == 0
+    cmd = ['tzutil', '/s', LINTOWIN[timezone]]
+    return __salt__['cmd.retcode'](cmd, python_shell=False) == 0
 
 
 def zone_compare(timezone):
@@ -551,7 +556,8 @@ def zone_compare(timezone):
 
         salt '*' timezone.zone_compare 'America/Denver'
     '''
-    return __salt__['cmd.run']('tzutil /g') == LINTOWIN[timezone]
+    cmd = ['tzutil', '/g']
+    return __salt__['cmd.run'](cmd, python_shell=False) == LINTOWIN[timezone]
 
 
 def get_hwclock():

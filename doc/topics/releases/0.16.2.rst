@@ -2,6 +2,8 @@
 Salt 0.16.2 Release Notes
 =========================
 
+:release: 2013-08-01
+
 Version 0.16.2 is a bugfix release for :doc:`0.16.0 </topics/releases/0.16.0>`,
 and contains a number of fixes.
 
@@ -193,4 +195,3 @@ Miscellaneous
   :mod:`extfs.tune <salt.modules.extfs.tune>` (:issue:`6462`)
 - Fixed a regression with the :mod:`module.run <salt.states.module.run>` state
   where the ``m_name`` and ``m_fun`` arguments were being ignored (:issue:`6464`)
-

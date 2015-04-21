@@ -9,7 +9,7 @@ Remote package support using ``pkg_add(1)``
     pkgng local database and, if found,  would provide some of pkgng's
     functionality. The rewrite of this module has removed all pkgng support,
     and moved it to the :mod:`pkgng <salt.modules.pkgng>` execution module. For
-    verisions <= 0.17.0, the documentation here should not be considered
+    versions <= 0.17.0, the documentation here should not be considered
     accurate. If your Minion is running one of these versions, then the
     documentation for this module can be viewed using the :mod:`sys.doc
     <salt.modules.sys.doc>` function:
@@ -19,7 +19,7 @@ Remote package support using ``pkg_add(1)``
         salt bsdminion sys.doc pkg
 
 
-This module acts as the default package provider for FreeBSD 9 and newer. If
+This module acts as the default package provider for FreeBSD 9 and older. If
 you need to use pkgng on a FreeBSD 9 system, you will need to override the
 ``pkg`` provider by setting the :conf_minion:`providers` parameter in your
 Minion config file, in order to use pkgng.
@@ -66,15 +66,22 @@ variables, if set, but these values can also be overridden in several ways:
               pkg.installed:
                 - fromrepo: ftp://ftp2.freebsd.org/
 '''
+from __future__ import absolute_import
 
 # Import python libs
 import copy
 import logging
+import re
 
 # Import salt libs
 import salt.utils
+from salt.exceptions import CommandExecutionError, MinionError
+import salt.ext.six as six
 
 log = logging.getLogger(__name__)
+
+# Define the module's virtual name
+__virtualname__ = 'pkg'
 
 
 def __virtual__():
@@ -82,7 +89,7 @@ def __virtual__():
     Load as 'pkg' on FreeBSD versions less than 10
     '''
     if __grains__['os'] == 'FreeBSD' and float(__grains__['osrelease']) < 10:
-        return 'pkg'
+        return __virtualname__
     return False
 
 
@@ -123,7 +130,8 @@ def _match(names):
 
     # Look for full matches
     full_pkg_strings = []
-    for line in __salt__['cmd.run_stdout']('pkg_info').splitlines():
+    out = __salt__['cmd.run_stdout']('pkg_info', output_loglevel='trace')
+    for line in out.splitlines():
         try:
             full_pkg_strings.append(line.split()[0])
         except IndexError:
@@ -182,6 +190,13 @@ def version(*names, **kwargs):
     installed. If more than one package name is specified, a dict of
     name/version pairs is returned.
 
+    with_origin : False
+        Return a nested dictionary containing both the origin name and version
+        for each specified package.
+
+        .. versionadded:: 2014.1.0
+
+
     CLI Example:
 
     .. code-block:: bash
@@ -189,7 +204,18 @@ def version(*names, **kwargs):
         salt '*' pkg.version <package name>
         salt '*' pkg.version <package1> <package2> <package3> ...
     '''
-    return __salt__['pkg_resource.version'](*names, **kwargs)
+    with_origin = kwargs.pop('with_origin', False)
+    ret = __salt__['pkg_resource.version'](*names, **kwargs)
+    if not salt.utils.is_true(with_origin):
+        return ret
+    # Put the return value back into a dict since we're adding a subdict
+    if len(names) == 1:
+        ret = {names[0]: ret}
+    origins = __context__.get('pkg.origin', {})
+    return dict([
+        (x, {'origin': origins.get(x, ''), 'version': y})
+        for x, y in six.iteritems(ret)
+    ])
 
 
 def refresh_db():
@@ -206,11 +232,17 @@ def refresh_db():
     return True
 
 
-def list_pkgs(versions_as_list=False, **kwargs):
+def list_pkgs(versions_as_list=False, with_origin=False, **kwargs):
     '''
     List the packages currently installed as a dict::
 
         {'<package_name>': '<version>'}
+
+    with_origin : False
+        Return a nested dictionary containing both the origin name and version
+        for each installed package.
+
+        .. versionadded:: 2014.1.0
 
     CLI Example:
 
@@ -219,32 +251,47 @@ def list_pkgs(versions_as_list=False, **kwargs):
         salt '*' pkg.list_pkgs
     '''
     versions_as_list = salt.utils.is_true(versions_as_list)
-    # 'removed' not applicable
-    if salt.utils.is_true(kwargs.get('removed')):
+    # not yet implemented or not applicable
+    if any([salt.utils.is_true(kwargs.get(x))
+            for x in ('removed', 'purge_desired')]):
         return {}
 
     if 'pkg.list_pkgs' in __context__:
-        if versions_as_list:
-            return __context__['pkg.list_pkgs']
-        else:
-            ret = copy.deepcopy(__context__['pkg.list_pkgs'])
+        ret = copy.deepcopy(__context__['pkg.list_pkgs'])
+        if not versions_as_list:
             __salt__['pkg_resource.stringify'](ret)
-            return ret
+        if salt.utils.is_true(with_origin):
+            origins = __context__.get('pkg.origin', {})
+            return dict([
+                (x, {'origin': origins.get(x, ''), 'version': y})
+                for x, y in six.iteritems(ret)
+            ])
+        return ret
 
     ret = {}
-    for line in __salt__['cmd.run_stdout']('pkg_info').splitlines():
-        if not line:
+    origins = {}
+    out = __salt__['cmd.run_stdout']('pkg_info -ao', output_loglevel='trace')
+    pkgs_re = re.compile(r'Information for ([^:]+):\s*Origin:\n([^\n]+)')
+    for pkg, origin in pkgs_re.findall(out):
+        if not pkg:
             continue
         try:
-            pkg, ver = line.split()[0].rsplit('-', 1)
-        except (IndexError, ValueError):
+            pkgname, pkgver = pkg.rsplit('-', 1)
+        except ValueError:
             continue
-        __salt__['pkg_resource.add_pkg'](ret, pkg, ver)
+        __salt__['pkg_resource.add_pkg'](ret, pkgname, pkgver)
+        origins[pkgname] = origin
 
     __salt__['pkg_resource.sort_pkglist'](ret)
     __context__['pkg.list_pkgs'] = copy.deepcopy(ret)
+    __context__['pkg.origin'] = origins
     if not versions_as_list:
         __salt__['pkg_resource.stringify'](ret)
+    if salt.utils.is_true(with_origin):
+        return dict([
+            (x, {'origin': origins.get(x, ''), 'version': y})
+            for x, y in six.iteritems(ret)
+        ])
     return ret
 
 
@@ -306,10 +353,12 @@ def install(name=None,
 
         salt '*' pkg.install <package name>
     '''
-    pkg_params, pkg_type = __salt__['pkg_resource.parse_targets'](name,
-                                                                  pkgs,
-                                                                  sources,
-                                                                  **kwargs)
+    try:
+        pkg_params, pkg_type = __salt__['pkg_resource.parse_targets'](
+            name, pkgs, sources, **kwargs
+        )
+    except MinionError as exc:
+        raise CommandExecutionError(exc)
 
     if not pkg_params:
         return {}
@@ -327,11 +376,15 @@ def install(name=None,
     args.extend(pkg_params)
 
     old = list_pkgs()
-    __salt__['cmd.run_all']('pkg_add {0}'.format(' '.join(args)), env=env)
+    __salt__['cmd.run'](
+        'pkg_add {0}'.format(' '.join(args)),
+        env=env,
+        output_loglevel='trace'
+    )
     __context__.pop('pkg.list_pkgs', None)
     new = list_pkgs()
-    rehash()
-    return __salt__['pkg_resource.find_changes'](old, new)
+    _rehash()
+    return salt.utils.compare_dicts(old, new)
 
 
 def upgrade():
@@ -375,7 +428,10 @@ def remove(name=None, pkgs=None, **kwargs):
         salt '*' pkg.remove <package1>,<package2>,<package3>
         salt '*' pkg.remove pkgs='["foo", "bar"]'
     '''
-    pkg_params = __salt__['pkg_resource.parse_targets'](name, pkgs)[0]
+    try:
+        pkg_params = __salt__['pkg_resource.parse_targets'](name, pkgs)[0]
+    except MinionError as exc:
+        raise CommandExecutionError(exc)
 
     old = list_pkgs()
     targets, errors = _match([x for x in pkg_params])
@@ -384,10 +440,10 @@ def remove(name=None, pkgs=None, **kwargs):
     if not targets:
         return {}
     cmd = 'pkg_delete {0}'.format(' '.join(targets))
-    __salt__['cmd.run_all'](cmd)
+    __salt__['cmd.run'](cmd, output_loglevel='trace')
     __context__.pop('pkg.list_pkgs', None)
     new = list_pkgs()
-    return __salt__['pkg_resource.find_changes'](old, new)
+    return salt.utils.compare_dicts(old, new)
 
 # Support pkg.delete to remove packages to more closely match pkg_delete
 delete = remove
@@ -395,21 +451,14 @@ delete = remove
 purge = remove
 
 
-def rehash():
+def _rehash():
     '''
-    Recomputes internal hash table for the PATH variable.
-    Use whenever a new command is created during the current
-    session.
-
-    CLI Example:
-
-    .. code-block:: bash
-
-        salt '*' pkg.rehash
+    Recomputes internal hash table for the PATH variable. Use whenever a new
+    command is created during the current session.
     '''
-    shell = __salt__['cmd.run']('echo $SHELL').split('/')
-    if shell[len(shell) - 1] in ['csh', 'tcsh']:
-        __salt__['cmd.run_all']('rehash')
+    shell = __salt__['environ.get']('SHELL', output_loglevel='trace')
+    if shell.split('/')[-1] in ('csh', 'tcsh'):
+        __salt__['cmd.run']('rehash', output_loglevel='trace')
 
 
 def file_list(*packages):
@@ -428,7 +477,7 @@ def file_list(*packages):
     '''
     ret = file_dict(*packages)
     files = []
-    for pkg_files in ret['files'].values():
+    for pkg_files in six.itervalues(ret['files']):
         files.extend(pkg_files)
     ret['files'] = files
     return ret
@@ -459,7 +508,7 @@ def file_dict(*packages):
     else:
         cmd = 'pkg_info -QLa'
 
-    ret = __salt__['cmd.run_all'](cmd)
+    ret = __salt__['cmd.run_all'](cmd, output_loglevel='trace')
 
     for line in ret['stderr'].splitlines():
         errors.append(line)

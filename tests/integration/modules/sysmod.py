@@ -1,4 +1,7 @@
+# -*- coding: utf-8 -*-
+
 # Import python libs
+from __future__ import absolute_import
 import re
 
 # Import Salt Testing libs
@@ -7,6 +10,9 @@ ensure_in_syspath('../../')
 
 # Import salt libs
 import integration
+
+# Import 3rd-party libs
+import salt.ext.six as six
 
 
 class SysModuleTest(integration.ModuleCase):
@@ -54,18 +60,27 @@ class SysModuleTest(integration.ModuleCase):
         noexample = set()
         allow_failure = (
                 'cp.recv',
+                'lxc.run_cmd',
                 'pkg.expand_repo_def',
                 'runtests_decorators.depends',
                 'runtests_decorators.depends_will_fallback',
                 'runtests_decorators.missing_depends',
-                'runtests_decorators.missing_depends_will_fallback',)
+                'runtests_decorators.missing_depends_will_fallback',
+                'yumpkg.expand_repo_def',
+                'yumpkg5.expand_repo_def',
+                'container_resource.run',
+                'nspawn.stop',
+                'nspawn.restart',
+        )
 
         for fun in docs:
+            if '.' not in fun:
+                continue
             if fun.startswith('runtests_helpers'):
                 continue
             if fun in allow_failure:
                 continue
-            if not isinstance(docs[fun], basestring):
+            if not isinstance(docs[fun], six.string_types):
                 nodoc.add(fun)
             elif not re.search(r'([E|e]xample(?:s)?)+(?:.*)::?', docs[fun]):
                 noexample.add(fun)
@@ -74,8 +89,8 @@ class SysModuleTest(integration.ModuleCase):
             return
 
         raise AssertionError(
-            'There are some functions which do not have a doctring or do not '
-            'have an example:\nNo doctring:\n{0}\nNo example:\n{1}\n'.format(
+            'There are some functions which do not have a docstring or do not '
+            'have an example:\nNo docstring:\n{0}\nNo example:\n{1}\n'.format(
                 '\n'.join(['  - {0}'.format(f) for f in sorted(nodoc)]),
                 '\n'.join(['  - {0}'.format(f) for f in sorted(noexample)]),
             )

@@ -1,13 +1,17 @@
+# -*- coding: utf-8 -*-
+
 '''
 Test the ssh module
 '''
 # Import python libs
+from __future__ import absolute_import
 import os
 import shutil
 
 # Import Salt Testing libs
-from salttesting.helpers import ensure_in_syspath
+from salttesting.helpers import ensure_in_syspath, skip_if_binaries_missing
 ensure_in_syspath('../../')
+
 
 # Import salt libs
 import integration
@@ -19,6 +23,7 @@ KNOWN_HOSTS = os.path.join(SUBSALT_DIR, 'known_hosts')
 GITHUB_FINGERPRINT = '16:27:ac:a5:76:28:2d:36:63:1b:56:4d:eb:df:a6:48'
 
 
+@skip_if_binaries_missing(['ssh', 'ssh-keygen'], check_all=True)
 class SSHModuleTest(integration.ModuleCase):
     '''
     Test the ssh module
@@ -66,6 +71,23 @@ class SSHModuleTest(integration.ModuleCase):
                     exc, ret
                 )
             )
+
+    def test_bad_enctype(self):
+        '''
+        test to make sure that bad key encoding types don't generate an
+        invalid key entry in authorized_keys
+        '''
+        shutil.copyfile(
+             os.path.join(integration.FILES, 'ssh', 'authorized_badkeys'),
+             AUTHORIZED_KEYS)
+        ret = self.run_function('ssh.auth_keys', ['root', AUTHORIZED_KEYS])
+
+        # The authorized_badkeys file contains a key with an invalid ssh key
+        # encoding (dsa-sha2-nistp256 instead of ecdsa-sha2-nistp256)
+        # auth_keys should skip any keys with invalid encodings.  Internally
+        # the minion will throw a CommandExecutionError so the
+        # user will get an indicator of what went wrong.
+        self.assertEqual(len(list(ret.items())), 0)  # Zero keys found
 
     def test_get_known_host(self):
         '''

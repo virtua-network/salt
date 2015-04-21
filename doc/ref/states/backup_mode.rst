@@ -4,7 +4,7 @@ File State Backups
 
 In 0.10.2 a new feature was added for backing up files that are replaced by
 the file.managed and file.recurse states. The new feature is called the backup
-mode. Setting the backup mode is easy, but is can be set in a number of
+mode. Setting the backup mode is easy, but it can be set in a number of
 places.
 
 The backup_mode can be set in the minion config file:
@@ -40,7 +40,9 @@ Listing
 -------
 
 The backups for a given file can be listed using :mod:`file.list_backups
-<salt.modules.file.list_backups>`::
+<salt.modules.file.list_backups>`:
+
+.. code-block:: bash
 
     # salt foo.bar.com file.list_backups /tmp/foo.txt
     foo.bar.com:
@@ -67,7 +69,9 @@ Restoring
 
 Restoring is easy using :mod:`file.restore_backup
 <salt.modules.file.restore_backup>`, just pass the path and the numeric id
-found with :mod:`file.list_backups <salt.modules.file.list_backups>`::
+found with :mod:`file.list_backups <salt.modules.file.list_backups>`:
+
+.. code-block:: bash
 
     # salt foo.bar.com file.restore_backup /tmp/foo.txt 1
     foo.bar.com:
@@ -78,7 +82,9 @@ found with :mod:`file.list_backups <salt.modules.file.list_backups>`::
             True
 
 The existing file will be backed up, just in case, as can be seen if
-:mod:`file.list_backups <salt.modules.file.list_backups>` is run again::
+:mod:`file.list_backups <salt.modules.file.list_backups>` is run again:
+
+.. code-block:: bash
 
     # salt foo.bar.com file.list_backups /tmp/foo.txt
     foo.bar.com:
@@ -116,8 +122,10 @@ The existing file will be backed up, just in case, as can be seen if
 Deleting
 --------
 
-Deleting backups can be done using mod:`file.delete_backup
-<salt.modules.file.delete_backup>`::
+Deleting backups can be done using :mod:`file.delete_backup
+<salt.modules.file.delete_backup>`:
+
+.. code-block:: bash
 
     # salt foo.bar.com file.delete_backup /tmp/foo.txt 0
     foo.bar.com:

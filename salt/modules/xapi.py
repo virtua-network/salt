@@ -13,14 +13,17 @@ Useful documentation:
 
 . http://downloads.xen.org/Wiki/XenAPI/xenapi-1.0.6.pdf
 . http://docs.vmd.citrix.com/XenServer/6.0.0/1.0/en_gb/api/
-. https://github.com/xen-org/xen-api/tree/master/scripts/examples/python
+. https://github.com/xapi-project/xen-api/tree/master/scripts/examples/python
 . http://xenbits.xen.org/gitweb/?p=xen.git;a=tree;f=tools/python/xen/xm;hb=HEAD
 '''
+from __future__ import absolute_import
 
 # Import python libs
 import sys
 import contextlib
 import os
+from salt.ext.six.moves import range
+from salt.ext.six.moves import map
 
 try:
     import importlib
@@ -32,12 +35,17 @@ except ImportError:
 # Import salt libs
 from salt.exceptions import CommandExecutionError
 import salt.utils
+import salt.modules.cmdmod
 
+# Define the module's virtual name
+__virtualname__ = 'virt'
 
 # This module has only been tested on Debian GNU/Linux and NetBSD, it
 # probably needs more path appending for other distributions.
 # The path to append is the path to python Xen libraries, where resides
 # XenAPI.
+
+
 def _check_xenapi():
     if __grains__['os'] == 'Debian':
         debian_xen_version = '/usr/lib/xen-common/bin/xen-version'
@@ -51,14 +59,14 @@ def _check_xenapi():
     try:
         if HAS_IMPORTLIB:
             return importlib.import_module('xen.xm.XenAPI')
-        return __import__('xen.xm.XenAPI')
-    except ImportError:
+        return __import__('xen.xm.XenAPI').xm.XenAPI
+    except (ImportError, AttributeError):
         return False
 
 
 def __virtual__():
     if _check_xenapi() is not False:
-        return 'virt'
+        return __virtualname__
     return False
 
 
@@ -517,8 +525,9 @@ def vcpu_pin(vm_, vcpu, cpus):
         # That code is accurate for all others XenAPI implementations, but
         # for that particular one, fallback to xm / xl instead.
         except Exception:
-            return __salt__['cmd.run']('{0} vcpu-pin {1} {2} {3}'.format(
-                                            _get_xtool(), vm_, vcpu, cpus))
+            return __salt__['cmd.run'](
+                    '{0} vcpu-pin {1} {2} {3}'.format(_get_xtool(), vm_, vcpu, cpus),
+                    python_shell=False)
 
 
 def freemem():
@@ -640,7 +649,7 @@ def create(config_):
 
         salt '*' virt.create <path to Xen cfg file>
     '''
-    return __salt__['cmd.run']('{0} create {1}'.format(_get_xtool(), config_))
+    return __salt__['cmd.run']('{0} create {1}'.format(_get_xtool(), config_), python_shell=False)
 
 
 def start(config_):
@@ -824,7 +833,7 @@ def vm_cputime(vm_=None):
                 # Divide by vcpus to always return a number between 0 and 100
                 cputime_percent = (1.0e-7 * cputime / host_cpus) / vcpus
             return {'cputime': int(cputime),
-                    'cputime_percent': int('%.0f' % cputime_percent)}
+                    'cputime_percent': int('{0:.0f}'.format(cputime_percent))}
         info = {}
         if vm_:
             info[vm_] = _info(vm_)

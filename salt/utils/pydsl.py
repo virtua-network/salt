@@ -69,7 +69,7 @@ Example of a ``cmd`` state calling a python function::
 #    - and a state function is a function declaration.
 
 
-#TODOs:
+# TODOs:
 #
 #  - support exclude declarations
 #
@@ -84,14 +84,19 @@ Example of a ``cmd`` state calling a python function::
 #
 
 # Import python libs
+from __future__ import absolute_import
 from uuid import uuid4 as _uuid
 
 # Import salt libs
 from salt.utils.odict import OrderedDict
+from salt.utils import warn_until
 from salt.state import HighState
 
+# Import 3rd-party libs
+import salt.ext.six as six
 
-REQUISITES = set('require watch use require_in watch_in use_in'.split())
+
+REQUISITES = set('listen require watch prereq use listen_in require_in watch_in prereq_in use_in onchanges onfail'.split())
 
 
 class PyDslError(Exception):
@@ -108,17 +113,16 @@ SLS_MATCHES = None
 
 class Sls(object):
 
-    def __init__(self, sls, env, rendered_sls):
+    def __init__(self, sls, saltenv, rendered_sls):
         self.name = sls
-        self.env = env
+        self.saltenv = saltenv
         self.includes = []
-        self.included_highstate = {}
+        self.included_highstate = HighState.get_active().building_highstate
         self.extends = []
         self.decls = []
         self.options = Options()
         self.funcs = []  # track the ordering of state func declarations
-        self.rendered_sls = rendered_sls  # a set of names of rendered sls
-                                          # modules
+        self.rendered_sls = rendered_sls  # a set of names of rendered sls modules
 
         if not HighState.get_active():
             raise PyDslError('PyDSL only works with a running high state!')
@@ -135,11 +139,20 @@ class Sls(object):
         self.options.update(options)
 
     def include(self, *sls_names, **kws):
-        env = kws.get('env', self.env)
+        if kws.get('env', None) is not None:
+            warn_until(
+                'Boron',
+                'Passing a salt environment should be done using \'saltenv\' '
+                'not \'env\'. This functionality will be removed in Salt Boron.'
+            )
+            # Backwards compatibility
+            kws['saltenv'] = kws.pop('env')
+
+        saltenv = kws.get('saltenv', self.saltenv)
 
         if kws.get('delayed', False):
             for incl in sls_names:
-                self.includes.append((env, incl))
+                self.includes.append((saltenv, incl))
             return
 
         HIGHSTATE = HighState.get_active()
@@ -151,11 +164,11 @@ class Sls(object):
         highstate = self.included_highstate
         slsmods = []  # a list of pydsl sls modules rendered.
         for sls in sls_names:
-            if sls not in self.rendered_sls:
-                self.rendered_sls.add(sls)  # needed in case the starting sls
-                                            # uses the pydsl renderer.
+            r_env = '{0}:{1}'.format(saltenv, sls)
+            if r_env not in self.rendered_sls:
+                self.rendered_sls.add(sls)  # needed in case the starting sls uses the pydsl renderer.
                 histates, errors = HIGHSTATE.render_state(
-                    sls, env, self.rendered_sls, SLS_MATCHES
+                    sls, saltenv, self.rendered_sls, SLS_MATCHES
                 )
                 HIGHSTATE.merge_included_states(highstate, histates, errors)
                 if errors:
@@ -167,7 +180,7 @@ class Sls(object):
                 slsmods.append(None)
             else:
                 for arg in highstate[state_id]['stateconf']:
-                    if isinstance(arg, dict) and iter(arg).next() == 'slsmod':
+                    if isinstance(arg, dict) and next(iter(arg)) == 'slsmod':
                         slsmods.append(arg['slsmod'])
                         break
 
@@ -237,21 +250,21 @@ class Sls(object):
         return highstate
 
     def load_highstate(self, highstate):
-        for sid, decl in highstate.iteritems():
+        for sid, decl in six.iteritems(highstate):
             s = self.state(sid)
-            for modname, args in decl.iteritems():
+            for modname, args in six.iteritems(decl):
                 if '.' in modname:
                     modname, funcname = modname.rsplit('.', 1)
                 else:
-                    funcname = (
-                        x for x in args if isinstance(x, basestring)
-                    ).next()
+                    funcname = next((
+                        x for x in args if isinstance(x, six.string_types)
+                    ))
                     args.remove(funcname)
                 mod = getattr(s, modname)
                 named_args = {}
                 for x in args:
                     if isinstance(x, dict):
-                        k, v = x.iteritems().next()
+                        k, v = next(six.iteritems(x))
                         named_args[k] = v
                 mod(funcname, **named_args)
 
@@ -279,7 +292,7 @@ class StateDeclaration(object):
         return iter(self._mods)
 
     def _repr(self, context=None):
-        return dict(m._repr(context) for m in self)
+        return OrderedDict(m._repr(context) for m in self)
 
     def __call__(self, check=True):
         sls = Sls.get_render_stack()[-1]
@@ -305,7 +318,16 @@ class StateDeclaration(object):
         result = HighState.get_active().state.functions['state.high'](
             {self._id: self._repr()}
         )
-        result = sorted(result.iteritems(), key=lambda t: t[1]['__run_num__'])
+
+        if not isinstance(result, dict):
+            # A list is an error
+            raise PyDslError(
+                'An error occurred while running highstate: {0}'.format(
+                    '; '.join(result)
+                )
+            )
+
+        result = sorted(six.iteritems(result), key=lambda t: t[1]['__run_num__'])
         if check:
             for k, v in result:
                 if not v['result']:
@@ -359,7 +381,7 @@ def _generate_requsite_method(t):
     def req(self, *args, **kws):
         for mod in args:
             self.reference(t, mod, None)
-        for mod_ref in kws.iteritems():
+        for mod_ref in six.iteritems(kws):
             self.reference(t, *mod_ref)
         return self
     return req
@@ -414,7 +436,7 @@ class StateFunction(object):
 
             args[0] = dict(name=args[0])
 
-        for k, v in kws.iteritems():
+        for k, v in six.iteritems(kws):
             args.append({k: v})
 
         self.args.extend(args)

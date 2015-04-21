@@ -4,6 +4,7 @@ Package support for pkgin based systems, inspired from freebsdpkg module
 '''
 
 # Import python libs
+from __future__ import absolute_import
 import os
 import re
 import logging
@@ -11,9 +12,16 @@ import logging
 # Import salt libs
 import salt.utils
 import salt.utils.decorators as decorators
+from salt.exceptions import CommandExecutionError, MinionError
+
+# Import 3rd-party libs
+import salt.ext.six as six
 
 VERSION_MATCH = re.compile(r'pkgin(?:[\s]+)([\d.]+)(?:[\s]+)(?:.*)')
 log = logging.getLogger(__name__)
+
+# Define the module's virtual name
+__virtualname__ = 'pkg'
 
 
 @decorators.memoize
@@ -24,7 +32,10 @@ def _check_pkgin():
     ppath = salt.utils.which('pkgin')
     if ppath is None:
         # pkgin was not found in $PATH, try to find it via LOCALBASE
-        localbase = __salt__['cmd.run']('pkg_info -Q LOCALBASE pkgin')
+        localbase = __salt__['cmd.run'](
+            'pkg_info -Q LOCALBASE pkgin',
+            output_loglevel='trace'
+        )
         if localbase is not None:
             ppath = '{0}/bin/pkgin'.format(localbase)
             if not os.path.exists(ppath):
@@ -39,7 +50,9 @@ def _supports_regex():
     Get the pkgin version
     '''
     ppath = _check_pkgin()
-    version_string = __salt__['cmd.run']('{0} -v'.format(ppath))
+    version_string = __salt__['cmd.run'](
+        '{0} -v'.format(ppath), output_loglevel='trace'
+    )
     if version_string is None:
         # Dunno why it would, but...
         return False
@@ -58,7 +71,7 @@ def __virtual__():
     supported = ['NetBSD', 'SunOS', 'DragonFly', 'Minix', 'Darwin', 'SmartOS']
 
     if __grains__['os'] in supported and _check_pkgin():
-        return 'pkg'
+        return __virtualname__
     return False
 
 
@@ -87,12 +100,15 @@ def search(pkg_name):
     if _supports_regex():
         pkg_name = '^{0}$'.format(pkg_name)
 
-    for p in __salt__['cmd.run']('{0} se {1}'.format(pkgin, pkg_name)
-                                 ).splitlines():
-        if p:
-            s = _splitpkg(p.split()[0])
-            if s:
-                pkglist[s[0]] = s[1]
+    out = __salt__['cmd.run'](
+        '{0} se {1}'.format(pkgin, pkg_name),
+        output_loglevel='trace'
+    )
+    for line in out.splitlines():
+        if line:
+            match = _splitpkg(line.split()[0])
+            if match:
+                pkglist[match[0]] = match[1]
 
     return pkglist
 
@@ -127,8 +143,11 @@ def latest_version(*names, **kwargs):
     for name in names:
         if _supports_regex():
             name = '^{0}$'.format(name)
-        for line in __salt__['cmd.run']('{0} se {1}'.format(pkgin, name)
-                                        ).splitlines():
+        out = __salt__['cmd.run'](
+            '{0} se {1}'.format(pkgin, name),
+            output_loglevel='trace'
+        )
+        for line in out.splitlines():
             p = line.split()  # pkgname-version status
             if p and p[0] in ('=:', '<:', '>:'):
                 # These are explanation comments
@@ -181,7 +200,16 @@ def refresh_db():
     pkgin = _check_pkgin()
 
     if pkgin:
-        __salt__['cmd.run']('{0} up'.format(pkgin))
+        call = __salt__['cmd.run_all']('{0} up'.format(pkgin), output_loglevel='trace')
+
+        if call['retcode'] != 0:
+            comment = ''
+            if 'stderr' in call:
+                comment += call['stderr']
+
+            raise CommandExecutionError(
+                '{0}'.format(comment)
+            )
 
     return {}
 
@@ -199,8 +227,9 @@ def list_pkgs(versions_as_list=False, **kwargs):
         salt '*' pkg.list_pkgs
     '''
     versions_as_list = salt.utils.is_true(versions_as_list)
-    # 'removed' not yet implemented or not applicable
-    if salt.utils.is_true(kwargs.get('removed')):
+    # not yet implemented or not applicable
+    if any([salt.utils.is_true(kwargs.get(x))
+            for x in ('removed', 'purge_desired')]):
         return {}
 
     pkgin = _check_pkgin()
@@ -211,10 +240,12 @@ def list_pkgs(versions_as_list=False, **kwargs):
 
     ret = {}
 
-    for line in __salt__['cmd.run'](pkg_command).splitlines():
-        if not line:
+    out = __salt__['cmd.run'](pkg_command, output_loglevel='trace')
+    for line in out.splitlines():
+        try:
+            pkg, ver = line.split(' ')[0].rsplit('-', 1)
+        except ValueError:
             continue
-        pkg, ver = line.split(' ')[0].rsplit('-', 1)
         __salt__['pkg_resource.add_pkg'](ret, pkg, ver)
 
     __salt__['pkg_resource.sort_pkglist'](ret)
@@ -272,10 +303,12 @@ def install(name=None, refresh=False, fromrepo=None,
 
         salt '*' pkg.install <package name>
     '''
-    pkg_params, pkg_type = __salt__['pkg_resource.parse_targets'](name,
-                                                                  pkgs,
-                                                                  sources,
-                                                                  **kwargs)
+    try:
+        pkg_params, pkg_type = __salt__['pkg_resource.parse_targets'](
+            name, pkgs, sources, **kwargs
+        )
+    except MinionError as exc:
+        raise CommandExecutionError(exc)
 
     # Support old "repo" argument
     repo = kwargs.get('repo', '')
@@ -310,11 +343,15 @@ def install(name=None, refresh=False, fromrepo=None,
     args.extend(pkg_params)
 
     old = list_pkgs()
-    __salt__['cmd.run_all']('{0} {1}'.format(cmd, ' '.join(args)), env=env)
+    __salt__['cmd.run'](
+        '{0} {1}'.format(cmd, ' '.join(args)),
+        env=env,
+        output_loglevel='trace'
+    )
     new = list_pkgs()
 
-    rehash()
-    return __salt__['pkg_resource.find_changes'](old, new)
+    _rehash()
+    return salt.utils.compare_dicts(old, new)
 
 
 def upgrade():
@@ -332,6 +369,10 @@ def upgrade():
 
         salt '*' pkg.upgrade
     '''
+    ret = {'changes': {},
+           'result': True,
+           'comment': '',
+           }
 
     pkgin = _check_pkgin()
     if not pkgin:
@@ -339,9 +380,18 @@ def upgrade():
         return {}
 
     old = list_pkgs()
-    __salt__['cmd.retcode']('{0} -y fug'.format(pkgin))
-    new = list_pkgs()
-    return __salt__['pkg_resource.find_changes'](old, new)
+    call = __salt__['cmd.run_all']('{0} -y fug'.format(pkgin))
+    if call['retcode'] != 0:
+        ret['result'] = False
+        if 'stderr' in call:
+            ret['comment'] += call['stderr']
+        if 'stdout' in call:
+            ret['comment'] += call['stdout']
+    else:
+        __context__.pop('pkg.list_pkgs', None)
+        new = list_pkgs()
+        ret['changes'] = salt.utils.compare_dicts(old, new)
+    return ret
 
 
 def remove(name=None, pkgs=None, **kwargs):
@@ -369,7 +419,13 @@ def remove(name=None, pkgs=None, **kwargs):
         salt '*' pkg.remove <package1>,<package2>,<package3>
         salt '*' pkg.remove pkgs='["foo", "bar"]'
     '''
-    pkg_params, pkg_type = __salt__['pkg_resource.parse_targets'](name, pkgs)
+    try:
+        pkg_params, pkg_type = __salt__['pkg_resource.parse_targets'](
+            name, pkgs
+        )
+    except MinionError as exc:
+        raise CommandExecutionError(exc)
+
     if not pkg_params:
         return {}
 
@@ -396,11 +452,10 @@ def remove(name=None, pkgs=None, **kwargs):
     else:
         cmd = 'pkg_remove {0}'.format(for_remove)
 
-    __salt__['cmd.run_all'](cmd)
-
+    __salt__['cmd.run'](cmd, output_loglevel='trace')
     new = list_pkgs()
 
-    return __salt__['pkg_resource.find_changes'](old, new)
+    return salt.utils.compare_dicts(old, new)
 
 
 def purge(name=None, pkgs=None, **kwargs):
@@ -434,21 +489,15 @@ def purge(name=None, pkgs=None, **kwargs):
     return remove(name=name, pkgs=pkgs)
 
 
-def rehash():
+def _rehash():
     '''
     Recomputes internal hash table for the PATH variable.
     Use whenever a new command is created during the current
     session.
-
-    CLI Example:
-
-    .. code-block:: bash
-
-        salt '*' pkg.rehash
     '''
-    shell = __salt__['cmd.run']('echo $SHELL').split('/')
-    if shell[len(shell) - 1] in ['csh', 'tcsh']:
-        __salt__['cmd.run']('rehash')
+    shell = __salt__['environ.get']('SHELL')
+    if shell.split('/')[-1] in ('csh', 'tcsh'):
+        __salt__['cmd.run']('rehash', output_loglevel='trace')
 
 
 def file_list(package):
@@ -463,7 +512,7 @@ def file_list(package):
     '''
     ret = file_dict(package)
     files = []
-    for pkg_files in ret['files'].values():
+    for pkg_files in six.itervalues(ret['files']):
         files.extend(pkg_files)
     ret['files'] = files
     return ret
@@ -484,7 +533,7 @@ def file_dict(package):
     files[package] = None
 
     cmd = 'pkg_info -qL {0}'.format(package)
-    ret = __salt__['cmd.run_all'](cmd)
+    ret = __salt__['cmd.run_all'](cmd, output_loglevel='trace')
 
     for line in ret['stderr'].splitlines():
         errors.append(line)
@@ -498,7 +547,6 @@ def file_dict(package):
         else:
             continue  # unexpected string
 
-    print files
     return {'errors': errors, 'files': files}
 
 # vim: tabstop=4 expandtab shiftwidth=4 softtabstop=4

@@ -1,8 +1,6 @@
 # -*- coding: utf-8 -*-
 '''
     :codeauthor: :email:`Pedro Algarvio (pedro@algarvio.me)`
-    :copyright: © 2013 by the SaltStack Team, see AUTHORS for more details.
-    :license: Apache 2.0, see LICENSE for more details.
 
 
     tests.unit.utils.format_call_test
@@ -10,6 +8,9 @@
 
     Test `salt.utils.format_call`
 '''
+
+# Import python libs
+from __future__ import absolute_import
 
 # Import Salt Testing libs
 from salttesting import TestCase
@@ -42,6 +43,7 @@ class TestFormatCall(TestCase):
     def test_mimic_typeerror_exceptions(self):
         def foo(one, two=2, three=3):
             pass
+
         def foo2(one, two, three=3):
             pass
 
@@ -54,7 +56,6 @@ class TestFormatCall(TestCase):
                 TypeError,
                 r'foo2 takes at least 2 arguments \(1 given\)'):
             format_call(foo2, dict(one=1))
-
 
 
 if __name__ == '__main__':

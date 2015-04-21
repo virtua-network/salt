@@ -2,6 +2,7 @@
 '''
 A few checks to make sure the environment is sane
 '''
+from __future__ import absolute_import
 
 # Original Author: Jeff Schroeder <jeffschroeder@computer.org>
 
@@ -10,8 +11,8 @@ import os
 import re
 import sys
 import stat
+import errno
 import socket
-import getpass
 import logging
 
 # Import third party libs
@@ -23,6 +24,7 @@ else:
 # Import salt libs
 from salt.log import is_console_configured
 from salt.exceptions import SaltClientError
+import salt.defaults.exitcodes
 import salt.utils
 
 log = logging.getLogger(__name__)
@@ -146,9 +148,8 @@ def verify_files(files, user):
     '''
     Verify that the named files exist and are owned by the named user
     '''
-    if 'os' in os.environ:
-        if os.environ['os'].startswith('Windows'):
-            return True
+    if salt.utils.is_windows():
+        return True
     import pwd  # after confirming not running Windows
     try:
         pwnam = pwd.getpwnam(user)
@@ -158,14 +159,23 @@ def verify_files(files, user):
         err = ('Failed to prepare the Salt environment for user '
                '{0}. The user is not available.\n').format(user)
         sys.stderr.write(err)
-        sys.exit(2)
+        sys.exit(salt.defaults.exitcodes.EX_NOUSER)
     for fn_ in files:
         dirname = os.path.dirname(fn_)
-        if not os.path.isdir(dirname):
-            os.makedirs(dirname)
-        if not os.path.isfile(fn_):
-            with salt.utils.fopen(fn_, 'w+') as fp_:
-                fp_.write('')
+        try:
+            try:
+                os.makedirs(dirname)
+            except OSError as err:
+                if err.errno != errno.EEXIST:
+                    raise
+            if not os.path.isfile(fn_):
+                with salt.utils.fopen(fn_, 'w+') as fp_:
+                    fp_.write('')
+        except OSError as err:
+            msg = 'Failed to create path "{0}" - {1}\n'
+            sys.stderr.write(msg.format(fn_, err))
+            sys.exit(err.errno)
+
         stats = os.stat(fn_)
         if uid != stats.st_uid:
             try:
@@ -180,22 +190,20 @@ def verify_env(dirs, user, permissive=False, pki_dir=''):
     Verify that the named directories are in place and that the environment
     can shake the salt
     '''
-    if 'os' in os.environ:
-        if os.environ['os'].startswith('Windows'):
-            return True
+    if salt.utils.is_windows():
+        return True
     import pwd  # after confirming not running Windows
-    import grp
     try:
         pwnam = pwd.getpwnam(user)
         uid = pwnam[2]
         gid = pwnam[3]
-        groups = [g.gr_gid for g in grp.getgrall() if user in g.gr_mem]
+        groups = salt.utils.get_gid_list(user, include_default=False)
 
     except KeyError:
         err = ('Failed to prepare the Salt environment for user '
                '{0}. The user is not available.\n').format(user)
         sys.stderr.write(err)
-        sys.exit(2)
+        sys.exit(salt.defaults.exitcodes.EX_NOUSER)
     for dir_ in dirs:
         if not dir_:
             continue
@@ -224,32 +232,34 @@ def verify_env(dirs, user, permissive=False, pki_dir=''):
                 else:
                     # chown the file for the new user
                     os.chown(dir_, uid, gid)
-            for root, dirs, files in os.walk(dir_):
-                if 'jobs' in root:
+            for subdir in [a for a in os.listdir(dir_) if 'jobs' not in a]:
+                fsubdir = os.path.join(dir_, subdir)
+                if '{0}jobs'.format(os.path.sep) in fsubdir:
                     continue
-                for name in files:
-                    if name.startswith('.'):
-                        continue
-                    path = os.path.join(root, name)
-                    try:
+                for root, dirs, files in os.walk(fsubdir):
+                    for name in files:
+                        if name.startswith('.'):
+                            continue
+                        path = os.path.join(root, name)
+                        try:
+                            fmode = os.stat(path)
+                        except (IOError, OSError):
+                            pass
+                        if fmode.st_uid != uid or fmode.st_gid != gid:
+                            if permissive and fmode.st_gid in groups:
+                                pass
+                            else:
+                                # chown the file for the new user
+                                os.chown(path, uid, gid)
+                    for name in dirs:
+                        path = os.path.join(root, name)
                         fmode = os.stat(path)
-                    except (IOError, OSError):
-                        pass
-                    if fmode.st_uid != uid or fmode.st_gid != gid:
-                        if permissive and fmode.st_gid in groups:
-                            pass
-                        else:
-                            # chown the file for the new user
-                            os.chown(path, uid, gid)
-                for name in dirs:
-                    path = os.path.join(root, name)
-                    fmode = os.stat(path)
-                    if fmode.st_uid != uid or fmode.st_gid != gid:
-                        if permissive and fmode.st_gid in groups:
-                            pass
-                        else:
-                            # chown the file for the new user
-                            os.chown(path, uid, gid)
+                        if fmode.st_uid != uid or fmode.st_gid != gid:
+                            if permissive and fmode.st_gid in groups:
+                                pass
+                            else:
+                                # chown the file for the new user
+                                os.chown(path, uid, gid)
         # Allow the pki dir to be 700 or 750, but nothing else.
         # This prevents other users from writing out keys, while
         # allowing the use-case of 3rd-party software (like django)
@@ -279,17 +289,33 @@ def check_user(user):
     '''
     Check user and assign process uid/gid.
     '''
-    if 'os' in os.environ:
-        if os.environ['os'].startswith('Windows'):
-            return True
-    if user == getpass.getuser():
+    if salt.utils.is_windows():
+        return True
+    if user == salt.utils.get_user():
         return True
     import pwd  # after confirming not running Windows
     try:
         pwuser = pwd.getpwnam(user)
         try:
+            if hasattr(os, 'initgroups'):
+                os.initgroups(user, pwuser.pw_gid)
+            else:
+                os.setgroups(salt.utils.get_gid_list(user, include_default=False))
             os.setgid(pwuser.pw_gid)
             os.setuid(pwuser.pw_uid)
+
+            # We could just reset the whole environment but let's just override
+            # the variables we can get from pwuser
+            if 'HOME' in os.environ:
+                os.environ['HOME'] = pwuser.pw_dir
+
+            if 'SHELL' in os.environ:
+                os.environ['SHELL'] = pwuser.pw_shell
+
+            for envvar in ('USER', 'LOGNAME'):
+                if envvar in os.environ:
+                    os.environ[envvar] = pwuser.pw_name
+
         except OSError:
             msg = 'Salt configured to run as user "{0}" but unable to switch.'
             msg = msg.format(user)
@@ -309,7 +335,7 @@ def check_user(user):
 
 
 def list_path_traversal(path):
-    """
+    '''
     Returns a full list of directories leading up to, and including, a path.
 
     So list_path_traversal('/path/to/salt') would return:
@@ -319,7 +345,7 @@ def list_path_traversal(path):
     This routine has been tested on Windows systems as well.
     list_path_traversal('c:\\path\\to\\salt') on Windows would return:
         ['c:\\', 'c:\\path', 'c:\\path\\to', 'c:\\path\\to\\salt']
-    """
+    '''
     out = [path]
     (head, tail) = os.path.split(path)
     if tail == '':
@@ -333,7 +359,7 @@ def list_path_traversal(path):
     return out
 
 
-def check_path_traversal(path, user='root'):
+def check_path_traversal(path, user='root', skip_perm_errors=False):
     '''
     Walk from the root up to a directory and verify that the current
     user has access to read each directory. This is used for  making
@@ -343,13 +369,22 @@ def check_path_traversal(path, user='root'):
     for tpath in list_path_traversal(path):
         if not os.access(tpath, os.R_OK):
             msg = 'Could not access {0}.'.format(tpath)
-            current_user = getpass.getuser()
-            # Make the error message more intelligent based on how
-            # the user invokes salt-call or whatever other script.
-            if user != current_user:
-                msg += ' Try running as user {0}.'.format(user)
+            if not os.path.exists(tpath):
+                msg += ' Path does not exist.'
             else:
-                msg += ' Please give {0} read permissions.'.format(user, tpath)
+                current_user = salt.utils.get_user()
+                # Make the error message more intelligent based on how
+                # the user invokes salt-call or whatever other script.
+                if user != current_user:
+                    msg += ' Try running as user {0}.'.format(user)
+                else:
+                    msg += ' Please give {0} read permissions.'.format(user)
+
+            # We don't need to bail on config file permission errors
+            # if the CLI
+            # process is run with the -a flag
+            if skip_perm_errors:
+                return
             # Propagate this exception up so there isn't a sys.exit()
             # in the middle of code that could be imported elsewhere.
             raise SaltClientError(msg)
@@ -369,10 +404,7 @@ def check_max_open_files(opts):
         mof_s, mof_h = resource.getrlimit(resource.RLIMIT_NOFILE)
 
     accepted_keys_dir = os.path.join(opts.get('pki_dir'), 'minions')
-    accepted_count = len([
-        key for key in os.listdir(accepted_keys_dir) if
-        os.path.isfile(os.path.join(accepted_keys_dir, key))
-    ])
+    accepted_count = len(os.listdir(accepted_keys_dir))
 
     log.debug(
         'This salt-master instance has accepted {0} minion keys.'.format(
@@ -443,4 +475,28 @@ def valid_id(opts, id_):
     '''
     Returns if the passed id is valid
     '''
-    return bool(clean_path(opts['pki_dir'], id_))
+    try:
+        return bool(clean_path(opts['pki_dir'], id_))
+    except (AttributeError, KeyError) as e:
+        return False
+
+
+def safe_py_code(code):
+    '''
+    Check a string to see if it has any potentially unsafe routines which
+    could be executed via python, this routine is used to improve the
+    safety of modules suct as virtualenv
+    '''
+    bads = (
+            'import',
+            ';',
+            'subprocess',
+            'eval',
+            'open',
+            'file',
+            'exec',
+            'input')
+    for bad in bads:
+        if code.count(bad):
+            return False
+    return True

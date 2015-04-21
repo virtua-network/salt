@@ -4,12 +4,16 @@ Set up the correct search system
 '''
 
 # Import python libs
+from __future__ import absolute_import
 import os
 
 # Import salt libs
 import salt.minion
 import salt.loader
 import salt.utils
+
+# Import 3rd-party libs
+import salt.ext.six as six
 
 
 def iter_ret(opts, ret):
@@ -41,24 +45,27 @@ def iter_ret(opts, ret):
         yield jids
 
 
-def _iter_dir(dir_, env):
+def _iter_dir(dir_, saltenv):
+    '''
+    Walk a dir path looking for files and marking their content type
+    '''
     ret = []
     for fn_ in os.listdir(dir_):
         path = os.path.join(dir_, fn_)
         if os.path.isdir(path):
-            yield _iter_dir(path, env)
+            yield _iter_dir(path, saltenv)
         elif os.path.isfile(path):
             with salt.utils.fopen(path) as fp_:
                 if salt.utils.istextfile(fp_):
                     ret.append(
-                        {'path': unicode(path),
-                         'env': unicode(env),
-                         'content': unicode(fp_.read())}
+                        {'path': six.text_type(path),
+                         'saltenv': six.text_type(saltenv),
+                         'content': six.text_type(fp_.read())}
                         )
                 else:
                     ret.append(
-                        {'path': unicode(path),
-                         'env': unicode(env),
+                        {'path': six.text_type(path),
+                         'saltenv': six.text_type(saltenv),
                          'content': u'bin'}
                         )
     yield ret
@@ -68,14 +75,14 @@ def iter_roots(roots):
     '''
     Accepts the file_roots or the pillar_roots structures and yields
     {'path': <path>,
-     'env': <env>,
+     'saltenv': <saltenv>,
      'cont': <contents>}
     '''
-    for env, dirs in roots.items():
+    for saltenv, dirs in six.iteritems(roots):
         for dir_ in dirs:
             if not os.path.isdir(dir_):
                 continue
-            for ret in _iter_dir(dir_, env):
+            for ret in _iter_dir(dir_, saltenv):
                 yield ret
 
 

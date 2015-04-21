@@ -2,6 +2,7 @@
 '''
 Module for managing VMs on SmartOS
 '''
+from __future__ import absolute_import
 
 # Import Python libs
 import json
@@ -10,6 +11,15 @@ import json
 from salt.exceptions import CommandExecutionError
 import salt.utils
 import salt.utils.decorators as decorators
+import salt.ext.six as six
+try:
+    from shlex import quote as _cmd_quote  # pylint: disable=E0611
+except ImportError:
+    from pipes import quote as _cmd_quote
+
+
+# Define the module's virtual name
+__virtualname__ = 'virt'
 
 
 @decorators.memoize
@@ -32,7 +42,7 @@ def __virtual__():
     Provides virt on SmartOS
     '''
     if __grains__['os'] == "SmartOS" and _check_vmadm():
-        return 'virt'
+        return __virtualname__
     return False
 
 
@@ -114,14 +124,14 @@ def init(**kwargs):
     if all(key in kwargs for key in check_zone_args):
         ret = _gen_zone_json(**kwargs)
         # validation first
-        cmd = 'echo \'{0}\' | {1} validate create'.format(ret, vmadm)
-        res = __salt__['cmd.run_all'](cmd)
+        cmd = 'echo {0} | {1} validate create'.format(_cmd_quote(ret), _cmd_quote(vmadm))
+        res = __salt__['cmd.run_all'](cmd, python_shell=True)
         retcode = res['retcode']
         if retcode != 0:
             return CommandExecutionError(_exit_status(retcode))
         # if succedeed, proceed to the VM creation
-        cmd = 'echo \'{0}\' | {1} create'.format(ret, vmadm)
-        res = __salt__['cmd.run_all'](cmd)
+        cmd = 'echo {0} | {1} create'.format(_cmd_quote(ret), _cmd_quote(vmadm))
+        res = __salt__['cmd.run_all'](cmd, python_shell=True)
         retcode = res['retcode']
         if retcode != 0:
             return CommandExecutionError(_exit_status(retcode))
@@ -150,7 +160,7 @@ def list_vms():
     retcode = res['retcode']
     if retcode != 0:
         raise CommandExecutionError(_exit_status(retcode))
-    for key, uuid in res.iteritems():
+    for key, uuid in six.iteritems(res):
         if key == "stdout":
             vms.append(uuid)
     return vms
@@ -173,7 +183,7 @@ def list_active_vms():
     retcode = res['retcode']
     if retcode != 0:
         raise CommandExecutionError(_exit_status(retcode))
-    for key, uuid in res.iteritems():
+    for key, uuid in six.iteritems(res):
         if key == "stdout":
             vms.append(uuid)
     return vms
@@ -196,7 +206,7 @@ def list_inactive_vms():
     retcode = res['retcode']
     if retcode != 0:
         raise CommandExecutionError(_exit_status(retcode))
-    for key, uuid in res.iteritems():
+    for key, uuid in six.iteritems(res):
         if key == "stdout":
             vms.append(uuid)
     return vms

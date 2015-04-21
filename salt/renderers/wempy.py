@@ -1,4 +1,7 @@
 # -*- coding: utf-8 -*-
+
+from __future__ import absolute_import
+
 # Import python libs
 from StringIO import StringIO
 
@@ -8,7 +11,7 @@ import salt.utils.templates
 
 
 def render(template_file,
-           env='',
+           saltenv='base',
            sls='',
            argline='',
            context=None,
@@ -23,7 +26,7 @@ def render(template_file,
             grains=__grains__,
             opts=__opts__,
             pillar=__pillar__,
-            env=env,
+            saltenv=saltenv,
             sls=sls,
             context=context,
             **kws)

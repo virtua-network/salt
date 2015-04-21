@@ -2,6 +2,8 @@
 Salt 0.12.0 Release Notes
 =========================
 
+:release: 2013-01-15
+
 Another feature release of Salt is here! Some exciting additions are included
 with more ways to make salt modular and even easier management of the salt
 file server.
@@ -100,7 +102,7 @@ Set Grains Remotely
 A new execution function and state module have been added that allows for
 grains to be set on the minion. Now grains can be set via a remote execution or
 via states. Use the `grains.present` state or the `grains.setval` execution
-functions. 
+functions.
 
 Gentoo Additions
 ----------------

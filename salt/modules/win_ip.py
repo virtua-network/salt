@@ -2,16 +2,28 @@
 '''
 The networking module for Windows based systems
 '''
+from __future__ import absolute_import
 
 # Import python libs
 import logging
 import socket
+import time
 
 # Import salt libs
 import salt.utils
+import salt.utils.network
+import salt.utils.validate.net
+from salt.exceptions import (
+    CommandExecutionError,
+    SaltInvocationError
+)
+from salt.ext.six.moves import range
 
 # Set up logging
 log = logging.getLogger(__name__)
+
+# Define the module's virtual name
+__virtualname__ = 'ip'
 
 
 def __virtual__():
@@ -19,7 +31,7 @@ def __virtual__():
     Confine this module to Windows systems
     '''
     if salt.utils.is_windows():
-        return 'ip'
+        return __virtualname__
     return False
 
 
@@ -27,8 +39,8 @@ def _interface_configs():
     '''
     Return all interface configs
     '''
-    cmd = 'netsh interface ip show config'
-    lines = __salt__['cmd.run'](cmd).splitlines()
+    cmd = ['netsh', 'interface', 'ip', 'show', 'config']
+    lines = __salt__['cmd.run'](cmd, python_shell=False).splitlines()
     iface = ''
     ip = 0
     dns_flag = None
@@ -96,10 +108,10 @@ def raw_interface_configs():
 
     .. code-block:: bash
 
-        salt '*' ip.raw_interface_configs
+        salt -G 'os_family:Windows' ip.raw_interface_configs
     '''
-    cmd = 'netsh interface ip show config'
-    return __salt__['cmd.run'](cmd)
+    cmd = ['netsh', 'interface', 'ip', 'show', 'config']
+    return __salt__['cmd.run'](cmd, python_shell=False)
 
 
 def get_all_interfaces():
@@ -110,7 +122,7 @@ def get_all_interfaces():
 
     .. code-block:: bash
 
-        salt '*' ip.get_all_interfaces
+        salt -G 'os_family:Windows' ip.get_all_interfaces
     '''
     return _interface_configs()
 
@@ -123,34 +135,175 @@ def get_interface(iface):
 
     .. code-block:: bash
 
-        salt '*' ip.get_interface 'Local Area Connection'
+        salt -G 'os_family:Windows' ip.get_interface 'Local Area Connection'
     '''
-    ifaces = _interface_configs()
-    if iface in ifaces:
-        return ifaces[iface]
-    return False
+    return _interface_configs().get(iface, {})
 
 
-def set_static_ip(iface, addr, netmask, gateway):
+def is_enabled(iface):
     '''
-    Set static IP configuration on a Windows NIC
+    Returns ``True`` if interface is enabled, otherwise ``False``
 
     CLI Example:
 
     .. code-block:: bash
 
-        salt '*' ip.set_static_ip 'Local Area Connection' 192.168.1.5 255.255.255.0 192.168.1.1
+        salt -G 'os_family:Windows' ip.is_enabled 'Local Area Connection #2'
     '''
-    if not any((iface, addr, netmask, gateway)):
-        return False
-    cmd = 'netsh int ip set address "{0}" static {1} {2} {3} 1'.format(
-            iface,
-            addr,
-            netmask,
-            gateway,
-            )
-    __salt__['cmd.run'](cmd)
-    return {'IP Address': addr, 'Netmask': netmask, 'Default Gateway': gateway}
+    cmd = ['netsh', 'interface', 'show', 'interface', 'name={0}'.format(iface)]
+    iface_found = False
+    for line in __salt__['cmd.run'](cmd, python_shell=False).splitlines():
+        if 'Connect state:' in line:
+            iface_found = True
+            return line.split()[-1] == 'Connected'
+    if not iface_found:
+        raise CommandExecutionError('Interface {0!r} not found'.format(iface))
+    return False
+
+
+def is_disabled(iface):
+    '''
+    Returns ``True`` if interface is disabled, otherwise ``False``
+
+    CLI Example:
+
+    .. code-block:: bash
+
+        salt -G 'os_family:Windows' ip.is_disabled 'Local Area Connection #2'
+    '''
+    return not is_enabled(iface)
+
+
+def enable(iface):
+    '''
+    Enable an interface
+
+    CLI Example:
+
+    .. code-block:: bash
+
+        salt -G 'os_family:Windows' ip.enable 'Local Area Connection #2'
+    '''
+    if is_enabled(iface):
+        return True
+    cmd = ['netsh', 'interface', 'set', 'interface', iface, 'admin=ENABLED']
+    __salt__['cmd.run'](cmd, python_shell=False)
+    return is_enabled(iface)
+
+
+def disable(iface):
+    '''
+    Disable an interface
+
+    CLI Example:
+
+    .. code-block:: bash
+
+        salt -G 'os_family:Windows' ip.disable 'Local Area Connection #2'
+    '''
+    if is_disabled(iface):
+        return True
+    cmd = ['netsh', 'interface', 'set', 'interface', iface, 'admin=DISABLED']
+    __salt__['cmd.run'](cmd, python_shell=False)
+    return is_disabled(iface)
+
+
+def get_subnet_length(mask):
+    '''
+    Convenience function to convert the netmask to the CIDR subnet length
+
+    CLI Example:
+
+    .. code-block:: bash
+
+        salt -G 'os_family:Windows' ip.get_subnet_length 255.255.255.0
+    '''
+    if not salt.utils.validate.net.netmask(mask):
+        raise SaltInvocationError('{0!r} is not a valid netmask'.format(mask))
+    return salt.utils.network.get_net_size(mask)
+
+
+def set_static_ip(iface, addr, gateway=None, append=False):
+    '''
+    Set static IP configuration on a Windows NIC
+
+    iface
+        The name of the interface to manage
+
+    addr
+        IP address with subnet length (ex. ``10.1.2.3/24``). The
+        :mod:`ip.get_subnet_length <salt.modules.win_ip.get_subnet_length>`
+        function can be used to calculate the subnet length from a netmask.
+
+    gateway : None
+        If specified, the default gateway will be set to this value.
+
+    append : False
+        If ``True``, this IP address will be added to the interface. Default is
+        ``False``, which overrides any existing configuration for the interface
+        and sets ``addr`` as the only address on the interface.
+
+    CLI Example:
+
+    .. code-block:: bash
+
+        salt -G 'os_family:Windows' ip.set_static_ip 'Local Area Connection' 10.1.2.3/24 gateway=10.1.2.1
+        salt -G 'os_family:Windows' ip.set_static_ip 'Local Area Connection' 10.1.2.4/24 append=True
+    '''
+    def _find_addr(iface, addr, timeout=1):
+        ip, cidr = addr.rsplit('/', 1)
+        netmask = salt.utils.network.cidr_to_ipv4_netmask(cidr)
+        for idx in range(timeout):
+            for addrinfo in get_interface(iface).get('ip_addrs', []):
+                if addrinfo['IP Address'] == ip \
+                        and addrinfo['Netmask'] == netmask:
+                    return addrinfo
+            time.sleep(1)
+        return {}
+
+    if not salt.utils.validate.net.ipv4_addr(addr):
+        raise SaltInvocationError('Invalid address {0!r}'.format(addr))
+
+    if gateway and not salt.utils.validate.net.ipv4_addr(addr):
+        raise SaltInvocationError(
+            'Invalid default gateway {0!r}'.format(gateway)
+        )
+
+    if '/' not in addr:
+        addr += '/32'
+
+    if append and _find_addr(iface, addr):
+        raise CommandExecutionError(
+            'Address {0!r} already exists on interface '
+            '{1!r}'.format(addr, iface)
+        )
+
+    cmd = ['netsh', 'interface', 'ip']
+    if append:
+        cmd.append('add')
+    else:
+        cmd.append('set')
+    cmd.extend(['address', 'name={0}'.format(iface)])
+    if not append:
+        cmd.append('source=static')
+    cmd.append('address={0}'.format(addr))
+    if gateway:
+        cmd.append('gateway={0}'.format(gateway))
+
+    result = __salt__['cmd.run_all'](cmd, python_shell=False)
+    if result['retcode'] != 0:
+        raise CommandExecutionError(
+            'Unable to set IP address: {0}'.format(result['stderr'])
+        )
+
+    new_addr = _find_addr(iface, addr, timeout=10)
+    if not new_addr:
+        return {}
+
+    ret = {'Address Info': new_addr}
+    if gateway:
+        ret['Default Gateway'] = gateway
+    return ret
 
 
 def set_dhcp_ip(iface):
@@ -161,10 +314,10 @@ def set_dhcp_ip(iface):
 
     .. code-block:: bash
 
-        salt '*' ip.set_dhcp_ip 'Local Area Connection'
+        salt -G 'os_family:Windows' ip.set_dhcp_ip 'Local Area Connection'
     '''
-    cmd = 'netsh interface ip set address "{0}" dhcp'.format(iface)
-    __salt__['cmd.run'](cmd)
+    cmd = ['netsh', 'interface', 'ip', 'set', 'address', iface, 'dhcp']
+    __salt__['cmd.run'](cmd, python_shell=False)
     return {'Interface': iface, 'DHCP enabled': 'Yes'}
 
 
@@ -176,21 +329,22 @@ def set_static_dns(iface, *addrs):
 
     .. code-block:: bash
 
-        salt '*' ip.set_static_dns 'Local Area Connection' '192.168.1.1'
-        salt '*' ip.set_static_dns 'Local Area Connection' '192.168.1.252' '192.168.1.253'
+        salt -G 'os_family:Windows' ip.set_static_dns 'Local Area Connection' '192.168.1.1'
+        salt -G 'os_family:Windows' ip.set_static_dns 'Local Area Connection' '192.168.1.252' '192.168.1.253'
     '''
     addr_index = 1
     for addr in addrs:
         if addr_index == 1:
-            cmd = 'netsh int ip set dns "{0}" static {1} primary'.format(
-                    iface,
-                    addrs[0],
-                    )
-            __salt__['cmd.run'](cmd)
+            cmd = ['netsh', 'int', 'ip', 'set', 'dns',
+                   iface, 'static', addrs[0], 'primary']
+            __salt__['cmd.run'](cmd, python_shell=False)
             addr_index = addr_index + 1
         else:
-            cmd = 'netsh interface ip add dns name="{0}" addr="{1}" index={2}'
-            __salt__['cmd.run'](cmd.format(iface, addr, addr_index))
+            cmd = ['netsh', 'interface', 'ip', 'add', 'dns',
+                   'name={0}'.format(iface),
+                   'addr={0}'.format(addr),
+                   'index={0}'.format(addr_index)]
+            __salt__['cmd.run'](cmd, python_shell=False)
             addr_index = addr_index + 1
     return {'Interface': iface, 'DNS Server': addrs}
 
@@ -203,10 +357,10 @@ def set_dhcp_dns(iface):
 
     .. code-block:: bash
 
-        salt '*' ip.set_dhcp_dns 'Local Area Connection'
+        salt -G 'os_family:Windows' ip.set_dhcp_dns 'Local Area Connection'
     '''
-    cmd = 'netsh interface ip set dns "{0}" dhcp'.format(iface)
-    __salt__['cmd.run'](cmd)
+    cmd = ['netsh', 'interface', 'ip', 'set', 'dns', iface, 'dhcp']
+    __salt__['cmd.run'](cmd, python_shell=False)
     return {'Interface': iface, 'DNS Server': 'DHCP'}
 
 
@@ -216,10 +370,32 @@ def set_dhcp_all(iface):
 
     CLI Example:
 
-    ..code-block:: bash
+    .. code-block:: bash
 
-        salt '*' ip.set_dhcp_all 'Local Area Connection'
+        salt -G 'os_family:Windows' ip.set_dhcp_all 'Local Area Connection'
     '''
     set_dhcp_ip(iface)
     set_dhcp_dns(iface)
     return {'Interface': iface, 'DNS Server': 'DHCP', 'DHCP enabled': 'Yes'}
+
+
+def get_default_gateway():
+    '''
+    Set DNS source to DHCP on Windows
+
+    CLI Example:
+
+    .. code-block:: bash
+
+        salt -G 'os_family:Windows' ip.get_default_gateway
+    '''
+    try:
+        return next(iter(
+            x.split()[-1] for x in __salt__['cmd.run'](
+                ['netsh', 'interface', 'ip', 'show', 'config'],
+                python_shell=False
+            ).splitlines()
+            if 'Default Gateway:' in x
+        ))
+    except StopIteration:
+        raise CommandExecutionError('Unable to find default gateway')

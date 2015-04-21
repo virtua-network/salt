@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 '''
-Management of MySQL grants (user permissions).
-==============================================
+Management of MySQL grants (user permissions)
+=============================================
 
 :depends:   - MySQLdb Python module
 :configuration: See :py:mod:`salt.modules.mysql` for setup instructions.
@@ -19,6 +19,10 @@ specification as defined in the MySQL documentation:
 * db_name.\\*
 * db_name.tbl_name
 * etc...
+
+This state is not able to set password for the permission from the
+specified host. See :py:mod:`salt.states.mysql_user` for further
+instructions.
 
 .. code-block:: yaml
 
@@ -41,6 +45,7 @@ specification as defined in the MySQL documentation:
        - database: somedb.sometable
        - user: joe
 '''
+from __future__ import absolute_import
 
 import sys
 
@@ -49,7 +54,7 @@ def __virtual__():
     '''
     Only load if the mysql module is available
     '''
-    return 'mysql_grants' if 'mysql.grant_exists' in __salt__ else False
+    return 'mysql.grant_exists' in __salt__
 
 
 def _get_mysql_error():
@@ -69,6 +74,8 @@ def present(name,
             host='localhost',
             grant_option=False,
             escape=True,
+            revoke_first=False,
+            ssl_option=False,
             **connection_args):
     '''
     Ensure that the grant is present with the specified properties
@@ -80,7 +87,7 @@ def present(name,
         The grant priv_type (i.e. select,insert,update OR all privileges)
 
     database
-        The database priv_level (ie. db.tbl OR db.*)
+        The database priv_level (i.e. db.tbl OR db.*)
 
     user
         The user to apply the grant to
@@ -89,10 +96,48 @@ def present(name,
         The network/host that the grant should apply to
 
     grant_option
-        Adds the WITH GRANT OPTION to the defined grant. default: False
+        Adds the WITH GRANT OPTION to the defined grant. Default is ``False``
 
     escape
-        Defines if the database value gets escaped or not. default: True
+        Defines if the database value gets escaped or not. Default is ``True``
+
+    revoke_first
+        By default, MySQL will not do anything if you issue a command to grant
+        privileges that are more restrictive than what's already in place. This
+        effectively means that you cannot downgrade permissions without first
+        revoking permissions applied to a db.table/user pair first.
+
+        To have Salt forcibly revoke perms before applying a new grant, enable
+        the 'revoke_first options.
+
+        WARNING: This will *remove* permissions for a database before attempting
+        to apply new permissions. There is no guarantee that new permissions
+        will be applied correctly which can leave your database security in an
+        unknown and potentially dangerous state.
+        Use with caution!
+
+        Default is ``False``
+
+    ssl_option
+        Adds the specified ssl options for the connecting user as requirements for
+        this grant. Value is a list of single-element dicts corresponding to the
+        list of ssl options to use.
+
+        Possible key/value pairings for the dicts in the value:
+
+        .. code-block:: text
+
+            - SSL: True
+            - X509: True
+            - SUBJECT: <subject>
+            - ISSUER: <issuer>
+            - CIPHER: <cipher>
+
+        The non-boolean ssl options take a string as their values, which should
+        be an appropriate value as specified by the MySQL documentation for these
+        options.
+
+        Default is ``False`` (no ssl options will be used)
     '''
     comment = 'Grant {0} on {1} to {2}@{3} is already present'
     ret = {'name': name,
@@ -111,14 +156,39 @@ def present(name,
             ret['comment'] = err
             ret['result'] = False
             return ret
+    if revoke_first and not __opts__['test']:
+        #  for each grant, break into tokens and see if its on the same
+        # user/db/table as ours. (there is probably only one)
+        user_grants = __salt__['mysql.user_grants'](user, host, **connection_args)
+        if not user_grants:
+            user_grants = []
+        for user_grant in user_grants:
+            token_grants = __salt__['mysql.tokenize_grant'](user_grant)
+            db_part = database.rpartition('.')
+            my_db = db_part[0]
+            my_table = db_part[2]
+            my_db = __salt__['mysql.quote_identifier'](my_db, (my_table is '*'))
+            my_table = __salt__['mysql.quote_identifier'](my_table)
+            # Removing per table grants in case of database level grant !!!
+            if token_grants['database'] == my_db:
+                grant_to_revoke = ','.join(token_grants['grant']).rstrip(',')
+                __salt__['mysql.grant_revoke'](
+                    grant=grant_to_revoke,
+                    database=database,
+                    user=user,
+                    host=host,
+                    grant_option=grant_option,
+                    escape=escape,
+                    **connection_args)
 
     # The grant is not present, make it!
     if __opts__['test']:
+        # there is probably better things to make in test mode
         ret['result'] = None
-        ret['comment'] = 'MySQL grant {0} is set to be created'.format(name)
+        ret['comment'] = ('MySQL grant {0} is set to be created').format(name)
         return ret
     if __salt__['mysql.grant_add'](
-        grant, database, user, host, grant_option, escape, **connection_args
+        grant, database, user, host, grant_option, escape, ssl_option, **connection_args
     ):
         ret['comment'] = 'Grant {0} on {1} to {2}@{3} has been added'
         ret['comment'] = ret['comment'].format(grant, database, user, host)
@@ -175,8 +245,8 @@ def absent(name,
 
         if __opts__['test']:
             ret['result'] = None
-            ret['comment'] = 'MySQL grant {0} is set to be revoked'
-            ret['comment'] = ret['comment'].format(name)
+            ret['comment'] = 'MySQL grant {0} is set to be ' \
+                             'revoked'.format(name)
             return ret
         if __salt__['mysql.grant_revoke'](
                 grant,
@@ -185,8 +255,8 @@ def absent(name,
                 host,
                 grant_option,
                 **connection_args):
-            ret['comment'] = 'Grant {0} on {1} for {2}@{3} has been revoked'
-            ret['comment'].format(grant, database, user, host)
+            ret['comment'] = 'Grant {0} on {1} for {2}@{3} has been ' \
+                             'revoked'.format(grant, database, user, host)
             ret['changes'][name] = 'Absent'
             return ret
         else:

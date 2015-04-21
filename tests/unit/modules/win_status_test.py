@@ -1,4 +1,7 @@
+# -*- coding: utf-8 -*-
+
 # Import python libs
+from __future__ import absolute_import
 import new
 import sys
 
@@ -14,7 +17,7 @@ sys.modules['wmi'] = wmi
 pythoncom = new.module('pythoncom')
 sys.modules['pythoncom'] = pythoncom
 
-from salttesting.mock import NO_MOCK, NO_MOCK_REASON, Mock, patch, call, ANY
+from salttesting.mock import NO_MOCK, NO_MOCK_REASON, Mock, patch, ANY
 
 if NO_MOCK is False:
     WMI = Mock()
@@ -22,7 +25,7 @@ if NO_MOCK is False:
     pythoncom.CoInitialize = Mock()
     pythoncom.CoUninitialize = Mock()
 
-# This is imported late so mock can do it's job
+# This is imported late so mock can do its job
 import salt.modules.win_status as status
 
 

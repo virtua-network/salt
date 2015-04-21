@@ -2,6 +2,8 @@
 Salt 0.13.0 Release Notes
 =========================
 
+:release: 2013-02-12
+
 The lucky number 13 has turned the corner! From CLI notifications when quitting
 a salt command, to substantial improvements on Windows, Salt 0.13.0 has
 arrived!
@@ -38,7 +40,7 @@ Blacklist Additions
 
 Additions allowing more granular blacklisting are available in 0.13.0. The
 ability to blacklist users and functions in client_acl have been added, as
-well as the ability to exclude state formulas from the command line. 
+well as the ability to exclude state formulas from the command line.
 
 Command Line Pillar Embedding
 -----------------------------
@@ -89,5 +91,5 @@ incompatible change with salt-cloud, and salt-cloud will need to be updated
 to the latest git to work with Salt 0.13.0. Salt Cloud 0.8.5 will also require
 Salt 0.13.0 or later to function.
 
-The Salt Stack team is sorry for the inconvenience here, we work hard to make
+The SaltStack team is sorry for the inconvenience here, we work hard to make
 sure these sorts of things do not happen, but sometimes hard changes get in.

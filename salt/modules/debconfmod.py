@@ -2,6 +2,7 @@
 '''
 Support for Debconf
 '''
+from __future__ import absolute_import
 
 # Import python libs
 import logging
@@ -17,6 +18,9 @@ __func_alias__ = {
     'set_': 'set'
 }
 
+# Define the module's virtual name
+__virtualname__ = 'debconf'
+
 
 def __virtual__():
     '''
@@ -27,10 +31,9 @@ def __virtual__():
         return False
 
     if salt.utils.which('debconf-get-selections') is None:
-        log.info('Package debconf-utils is not installed.')
         return False
 
-    return 'debconf'
+    return __virtualname__
 
 
 def _unpack_lines(out):
@@ -101,7 +104,7 @@ def _set_file(path):
     '''
     cmd = 'debconf-set-selections {0}'.format(path)
 
-    __salt__['cmd.run_stdout'](cmd)
+    __salt__['cmd.run_stdout'](cmd, python_shell=False)
 
 
 def set_(package, question, type, value, *extra):
@@ -131,7 +134,43 @@ def set_(package, question, type, value, *extra):
     return True
 
 
-def set_file(path, **kwargs):
+def set_template(path, template, context, defaults, saltenv='base', **kwargs):
+    '''
+    Set answers to debconf questions from a template.
+
+    path
+        location of the file containing the package selections
+
+    template
+        template format
+
+    context
+        variables to add to the template environment
+
+    default
+        default values for the template environment
+
+    CLI Example:
+
+    .. code-block:: bash
+
+        salt '*' debconf.set_template salt://pathto/pkg.selections.jinja jinja None None
+
+    '''
+
+    path = __salt__['cp.get_template'](
+        path=path,
+        dest=None,
+        template=template,
+        saltenv=saltenv,
+        context=context,
+        defaults=defaults,
+        **kwargs)
+
+    return set_file(path, saltenv, **kwargs)
+
+
+def set_file(path, saltenv='base', **kwargs):
     '''
     Set answers to debconf questions from a file.
 
@@ -141,7 +180,15 @@ def set_file(path, **kwargs):
 
         salt '*' debconf.set_file salt://pathto/pkg.selections
     '''
-    path = __salt__['cp.cache_file'](path, kwargs.get('__env__', 'base'))
+    if '__env__' in kwargs:
+        salt.utils.warn_until(
+            'Boron',
+            'Passing a salt environment should be done using \'saltenv\' not '
+            '\'__env__\'. This functionality will be removed in Salt Boron.'
+        )
+        # Backwards compatibility
+        saltenv = kwargs['__env__']
+    path = __salt__['cp.cache_file'](path, saltenv)
     if path:
         _set_file(path)
         return True

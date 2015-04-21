@@ -3,6 +3,7 @@
 Manage a local persistent data structure that can hold any arbitrary data
 specific to the minion
 '''
+from __future__ import absolute_import
 
 # Import python libs
 import os
@@ -45,7 +46,7 @@ def load():
 
     try:
         datastore_path = os.path.join(__opts__['cachedir'], 'datastore')
-        fn_ = salt.utils.fopen(datastore_path, "r")
+        fn_ = salt.utils.fopen(datastore_path, 'rb')
         return serial.load(fn_)
     except (IOError, OSError):
         return {}
@@ -69,7 +70,7 @@ def dump(new_data):
 
     try:
         datastore_path = os.path.join(__opts__['cachedir'], 'datastore')
-        with salt.utils.fopen(datastore_path, "w") as fn_:
+        with salt.utils.fopen(datastore_path, 'w+b') as fn_:
             serial = salt.payload.Serial(__opts__)
             serial.dump(new_data, fn_)
 
@@ -146,4 +147,5 @@ def cas(key, value, old_value):
         return False
 
     store[key] = value
+    dump(store)
     return True

@@ -10,7 +10,10 @@ Full list of builtin fileserver modules
     :toctree:
     :template: autosummary.rst.tmpl
 
+    azurefs
     gitfs
     hgfs
+    minionfs
     roots
     s3fs
+    svnfs

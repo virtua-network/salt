@@ -1,10 +1,13 @@
 # -*- coding: utf-8 -*-
 '''
-Manage RabbitMQ Policies.
+Manage RabbitMQ Policies
+========================
 
 :maintainer:    Benn Eichhorn <benn@getlocalmeasure.com>
 :maturity:      new
 :platform:      all
+
+Example:
 
 .. code-block:: yaml
 
@@ -12,12 +15,13 @@ Manage RabbitMQ Policies.
         rabbitmq_policy.present:
             - name: HA
             - pattern: '.*'
-            - definition: '{"ha-mode": "all"}'
+            - definition: '{"ha-mode":"all"}'
 '''
+from __future__ import absolute_import
 
 # Import python libs
 import logging
-from salt import exceptions, utils
+import salt.utils
 
 log = logging.getLogger(__name__)
 
@@ -26,12 +30,7 @@ def __virtual__():
     '''
     Only load if RabbitMQ is installed.
     '''
-    name = 'rabbitmq_policy'
-    try:
-        utils.check_or_die('rabbitmqctl')
-    except exceptions.CommandNotFoundError:
-        name = False
-    return name
+    return salt.utils.which('rabbitmqctl') is not None
 
 
 def present(name,
@@ -69,8 +68,12 @@ def present(name,
             updates.append('Pattern')
         if policy.get('definition') != definition:
             updates.append('Definition')
-        if policy.get('priority') != priority:
+        if int(policy.get('priority')) != priority:
             updates.append('Priority')
+
+    if policy and not updates:
+        ret['comment'] = 'Policy {0} {1} is already present'.format(vhost, name)
+        return ret
 
     if __opts__['test']:
         ret['result'] = None
@@ -78,28 +81,27 @@ def present(name,
             ret['comment'] = 'Policy {0} {1} is set to be created'.format(vhost, name)
         elif updates:
             ret['comment'] = 'Policy {0} {1} is set to be updated'.format(vhost, name)
-        else:
-            ret['comment'] = 'Policy {0} {1} is already present'.format(vhost, name)
-        ret['comment'] = ret['comment'].format(name)
     else:
+        changes = {'new': '', 'old': ''}
         if not policy:
+            changes['new'] = policy
             log.debug(
                 "Policy doesn't exist - Creating")
             result = __salt__['rabbitmq.set_policy'](
                 vhost, name, pattern, definition, priority=priority, runas=runas)
         elif updates:
+            changes['old'] = policy
+            changes['new'] = updates
             log.debug('Policy exists but needs updating')
             result = __salt__['rabbitmq.set_policy'](
                 vhost, name, pattern, definition, priority=priority, runas=runas)
-        else:
-            log.debug('Policy exists and requires no updates')
-            ret['comment'] = 'Policy {0} {1} is present'.format(vhost, name)
 
         if 'Error' in result:
             ret['result'] = False
             ret['comment'] = result['Error']
         elif 'Set' in result:
             ret['comment'] = result['Set']
+            ret['changes'] = changes
 
     return ret
 
@@ -122,21 +124,20 @@ def absent(name,
     policy_exists = __salt__['rabbitmq.policy_exists'](
         vhost, name, runas=runas)
 
+    if not policy_exists:
+        ret['comment'] = 'Policy {0} {1} is not present'.format(vhost, name)
+        return ret
+
     if __opts__['test']:
         ret['result'] = None
-        if policy_exists:
-            ret['comment'] = 'Removing policy {0} {1}'.format(vhost, name)
-        else:
-            ret['comment'] = 'Policy {0} {1} is not present'.format(vhost, name)
+        ret['comment'] = 'Removing policy {0} {1}'.format(vhost, name)
     else:
-        if policy_exists:
-            result = __salt__['rabbitmq.delete_policy'](vhost, name, runas=runas)
-            if 'Error' in result:
-                ret['result'] = False
-                ret['comment'] = result['Error']
-            elif 'Deleted' in result:
-                ret['comment'] = 'Deleted'
-        else:
-            ret['comment'] = 'Policy {0} {1} is not present'.format(vhost, name)
+        result = __salt__['rabbitmq.delete_policy'](vhost, name, runas=runas)
+        if 'Error' in result:
+            ret['result'] = False
+            ret['comment'] = result['Error']
+        elif 'Deleted' in result:
+            ret['comment'] = 'Deleted'
+            ret['changes'] = {'new': '', 'old': name}
 
     return ret

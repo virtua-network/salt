@@ -33,10 +33,12 @@ about this, at least.
     stop on runlevel [016]
 
 .. warning::
-    This module should not be used on Red Hat systems. For these, the
-    :mod:`rh_service <salt.modules.rh_service>` module should be used, as it
-    supports the hybrid upstart/sysvinit system used in RHEL/CentOS 6.
+    This module should not be used on Red Hat systems. For these,
+    the :mod:`rh_service <salt.modules.rh_service>` module should be
+    used, as it supports the hybrid upstart/sysvinit system used in
+    RHEL/CentOS 6.
 '''
+from __future__ import absolute_import
 
 # Import python libs
 import glob
@@ -44,10 +46,15 @@ import os
 
 # Import salt libs
 import salt.utils
+import salt.modules.cmdmod
+import salt.utils.systemd
 
 __func_alias__ = {
     'reload_': 'reload'
 }
+
+# Define the module's virtual name
+__virtualname__ = 'service'
 
 
 def __virtual__():
@@ -55,8 +62,16 @@ def __virtual__():
     Only work on Ubuntu
     '''
     # Disable on these platforms, specific service modules exist:
-    if __grains__['os'] in ('Ubuntu', 'Linaro', 'elementary OS'):
-        return 'service'
+    if salt.utils.systemd.booted(__context__):
+        return False
+    elif __grains__['os'] in ('Ubuntu', 'Linaro', 'elementary OS', 'Mint'):
+        return __virtualname__
+    elif __grains__['os'] in ('Debian', 'Raspbian'):
+        debian_initctl = '/sbin/initctl'
+        if os.path.isfile(debian_initctl):
+            initctl_version = salt.modules.cmdmod._run_quiet(debian_initctl + ' version')
+            if 'upstart' in initctl_version:
+                return __virtualname__
     return False
 
 
@@ -67,12 +82,12 @@ def _find_utmp():
     '''
     result = {}
     # These are the likely locations for the file on Ubuntu
-    for utmp in ('/var/run/utmp', '/run/utmp'):
+    for utmp in '/var/run/utmp', '/run/utmp':
         try:
             result[os.stat(utmp).st_mtime] = utmp
         except Exception:
             pass
-    return result[sorted(result.keys()).pop()]
+    return result[sorted(result).pop()]
 
 
 def _default_runlevel():
@@ -123,7 +138,7 @@ def _runlevel():
     '''
     if 'upstart._runlevel' in __context__:
         return __context__['upstart._runlevel']
-    out = __salt__['cmd.run']('runlevel {0}'.format(_find_utmp()))
+    out = __salt__['cmd.run'](['runlevel', '{0}'.format(_find_utmp())], python_shell=False)
     try:
         ret = out.split()[1]
     except IndexError:
@@ -269,6 +284,21 @@ def available(name):
     return name in get_all()
 
 
+def missing(name):
+    '''
+    The inverse of service.available.
+    Returns ``True`` if the specified service is not available, otherwise returns
+    ``False``.
+
+    CLI Example:
+
+    .. code-block:: bash
+
+        salt '*' service.missing sshd
+    '''
+    return name not in get_all()
+
+
 def get_all():
     '''
     Return all installed services
@@ -292,8 +322,8 @@ def start(name):
 
         salt '*' service.start <service name>
     '''
-    cmd = 'service {0} start'.format(name)
-    return not __salt__['cmd.retcode'](cmd)
+    cmd = ['service', name, 'start']
+    return not __salt__['cmd.retcode'](cmd, python_shell=False)
 
 
 def stop(name):
@@ -306,8 +336,8 @@ def stop(name):
 
         salt '*' service.stop <service name>
     '''
-    cmd = 'service {0} stop'.format(name)
-    return not __salt__['cmd.retcode'](cmd)
+    cmd = ['service', name, 'stop']
+    return not __salt__['cmd.retcode'](cmd, python_shell=False)
 
 
 def restart(name):
@@ -320,8 +350,8 @@ def restart(name):
 
         salt '*' service.restart <service name>
     '''
-    cmd = 'service {0} restart'.format(name)
-    return not __salt__['cmd.retcode'](cmd)
+    cmd = ['service', name, 'restart']
+    return not __salt__['cmd.retcode'](cmd, python_shell=False)
 
 
 def full_restart(name):
@@ -334,8 +364,8 @@ def full_restart(name):
 
         salt '*' service.full_restart <service name>
     '''
-    cmd = 'service {0} --full-restart'.format(name)
-    return not __salt__['cmd.retcode'](cmd)
+    cmd = ['service', name, '--full-restart']
+    return not __salt__['cmd.retcode'](cmd, python_shell=False)
 
 
 def reload_(name):
@@ -348,8 +378,8 @@ def reload_(name):
 
         salt '*' service.reload <service name>
     '''
-    cmd = 'service {0} reload'.format(name)
-    return not __salt__['cmd.retcode'](cmd)
+    cmd = ['service', name, 'reload']
+    return not __salt__['cmd.retcode'](cmd, python_shell=False)
 
 
 def force_reload(name):
@@ -362,8 +392,8 @@ def force_reload(name):
 
         salt '*' service.force_reload <service name>
     '''
-    cmd = 'service {0} force-reload'.format(name)
-    return not __salt__['cmd.retcode'](cmd)
+    cmd = ['service', name, 'force-reload']
+    return not __salt__['cmd.retcode'](cmd, python_shell=False)
 
 
 def status(name, sig=None):
@@ -379,10 +409,10 @@ def status(name, sig=None):
     '''
     if sig:
         return bool(__salt__['status.pid'](sig))
-    cmd = 'service {0} status'.format(name)
+    cmd = ['service', name, 'status']
     if _service_is_upstart(name):
-        return 'start/running' in __salt__['cmd.run'](cmd)
-    return not bool(__salt__['cmd.retcode'](cmd))
+        return 'start/running' in __salt__['cmd.run'](cmd, python_shell=False)
+    return not bool(__salt__['cmd.retcode'](cmd, python_shell=False))
 
 
 def _get_service_exec():
@@ -400,7 +430,7 @@ def _upstart_disable(name):
     Disable an Upstart service.
     '''
     override = '/etc/init/{0}.override'.format(name)
-    with file(override, 'w') as ofile:
+    with salt.utils.fopen(override, 'w') as ofile:
         ofile.write('manual')
     return _upstart_is_disabled(name)
 
@@ -428,8 +458,8 @@ def enable(name, **kwargs):
     if _service_is_upstart(name):
         return _upstart_enable(name)
     executable = _get_service_exec()
-    cmd = '{0} -f {1} defaults'.format(executable, name)
-    return not __salt__['cmd.retcode'](cmd)
+    cmd = '{0} -f {1} enable'.format(executable, name)
+    return not __salt__['cmd.retcode'](cmd, python_shell=False)
 
 
 def disable(name, **kwargs):
@@ -445,11 +475,11 @@ def disable(name, **kwargs):
     if _service_is_upstart(name):
         return _upstart_disable(name)
     executable = _get_service_exec()
-    cmd = '{0} -f {1} remove'.format(executable, name)
-    return not __salt__['cmd.retcode'](cmd)
+    cmd = [executable, '-f', name, 'remove']
+    return not __salt__['cmd.retcode'](cmd, python_shell=False)
 
 
-def enabled(name):
+def enabled(name, **kwargs):
     '''
     Check to see if the named service is enabled to start on boot
 

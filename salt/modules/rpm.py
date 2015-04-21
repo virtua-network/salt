@@ -4,12 +4,19 @@ Support for rpm
 '''
 
 # Import python libs
+from __future__ import absolute_import
 import logging
+import re
 
 # Import Salt libs
 import salt.utils
+import salt.utils.decorators as decorators
+from salt.ext.six.moves import zip  # pylint: disable=import-error,redefined-builtin
 
 log = logging.getLogger(__name__)
+
+# Define the module's virtual name
+__virtualname__ = 'lowpkg'
 
 
 def __virtual__():
@@ -18,24 +25,16 @@ def __virtual__():
     '''
     if not salt.utils.which('rpm'):
         return False
-
-    # Work only on RHEL/Fedora based distros with python 2.6 or greater
-    # TODO: Someone decide if we can just test os_family and pythonversion
-    os_grain = __grains__['os']
-    os_family = __grains__['os_family']
     try:
-        os_major = int(__grains__['osrelease'].split('.')[0])
-    except (AttributeError, ValueError):
-        os_major = 0
+        os_grain = __grains__['os'].lower()
+        os_family = __grains__['os_family'].lower()
+    except Exception:
+        return False
 
-    if os_grain == 'Amazon':
-        return 'lowpkg'
-    elif os_grain == 'Fedora':
-        # Fedora <= 10 used Python 2.5 and below
-        if os_major >= 11:
-            return 'lowpkg'
-    elif os_family == 'RedHat' and os_major >= 6:
-        return 'lowpkg'
+    enabled = ('amazon', 'xcp', 'xenserver')
+
+    if os_family in ['redhat', 'suse'] or os_grain in enabled:
+        return __virtualname__
     return False
 
 
@@ -51,7 +50,6 @@ def list_pkgs(*packages):
 
         salt '*' lowpkg.list_pkgs
     '''
-    errors = []
     pkgs = {}
     if not packages:
         cmd = 'rpm -qa --qf \'%{NAME} %{VERSION}\\n\''
@@ -59,24 +57,30 @@ def list_pkgs(*packages):
         cmd = 'rpm -q --qf \'%{{NAME}} %{{VERSION}}\\n\' {0}'.format(
             ' '.join(packages)
         )
-    for line in __salt__['cmd.run'](cmd).splitlines():
+    out = __salt__['cmd.run'](cmd, python_shell=False, output_loglevel='trace')
+    for line in out.splitlines():
         if 'is not installed' in line:
-            errors.append(line)
             continue
         comps = line.split()
         pkgs[comps[0]] = comps[1]
     return pkgs
 
 
-def verify(*package):
+def verify(*package, **kwargs):
     '''
     Runs an rpm -Va on a system, and returns the results in a dict
+
+    Files with an attribute of config, doc, ghost, license or readme in the
+    package header can be ignored using the ``ignore_types`` keyword argument
 
     CLI Example:
 
     .. code-block:: bash
 
         salt '*' lowpkg.verify
+        salt '*' lowpkg.verify httpd
+        salt '*' lowpkg.verify 'httpd postfix'
+        salt '*' lowpkg.verify 'httpd postfix' ignore_types=['config','doc']
     '''
     ftypes = {'c': 'config',
               'd': 'doc',
@@ -84,12 +88,18 @@ def verify(*package):
               'l': 'license',
               'r': 'readme'}
     ret = {}
+    ignore_types = kwargs.get('ignore_types', [])
     if package:
         packages = ' '.join(package)
         cmd = 'rpm -V {0}'.format(packages)
     else:
         cmd = 'rpm -Va'
-    for line in __salt__['cmd.run'](cmd).split('\n'):
+    out = __salt__['cmd.run'](
+            cmd,
+            python_shell=False,
+            output_loglevel='trace',
+            ignore_retcode=True)
+    for line in out.splitlines():
         fdict = {'mismatch': []}
         if 'missing' in line:
             line = ' ' + line
@@ -98,26 +108,100 @@ def verify(*package):
         fname = line[13:]
         if line[11:12] in ftypes:
             fdict['type'] = ftypes[line[11:12]]
-        if line[0:1] == 'S':
-            fdict['mismatch'].append('size')
-        if line[1:2] == 'M':
-            fdict['mismatch'].append('mode')
-        if line[2:3] == '5':
-            fdict['mismatch'].append('md5sum')
-        if line[3:4] == 'D':
-            fdict['mismatch'].append('device major/minor number')
-        if line[4:5] == 'L':
-            fdict['mismatch'].append('readlink path')
-        if line[5:6] == 'U':
-            fdict['mismatch'].append('user')
-        if line[6:7] == 'G':
-            fdict['mismatch'].append('group')
-        if line[7:8] == 'T':
-            fdict['mismatch'].append('mtime')
-        if line[8:9] == 'P':
-            fdict['mismatch'].append('capabilities')
-        ret[fname] = fdict
+        if 'type' not in fdict or fdict['type'] not in ignore_types:
+            if line[0:1] == 'S':
+                fdict['mismatch'].append('size')
+            if line[1:2] == 'M':
+                fdict['mismatch'].append('mode')
+            if line[2:3] == '5':
+                fdict['mismatch'].append('md5sum')
+            if line[3:4] == 'D':
+                fdict['mismatch'].append('device major/minor number')
+            if line[4:5] == 'L':
+                fdict['mismatch'].append('readlink path')
+            if line[5:6] == 'U':
+                fdict['mismatch'].append('user')
+            if line[6:7] == 'G':
+                fdict['mismatch'].append('group')
+            if line[7:8] == 'T':
+                fdict['mismatch'].append('mtime')
+            if line[8:9] == 'P':
+                fdict['mismatch'].append('capabilities')
+            ret[fname] = fdict
     return ret
+
+
+def modified(*packages, **flags):
+    '''
+    List the modified files that belong to a package. Not specifying any packages
+    will return a list of _all_ modified files on the system's RPM database.
+
+    .. versionadded:: 2015.2.0
+
+    CLI examples:
+
+    .. code-block:: bash
+
+        salt '*' lowpkg.modified httpd
+        salt '*' lowpkg.modified httpd postfix
+        salt '*' lowpkg.modified
+    '''
+    ret = __salt__['cmd.run_all'](
+        ['rpm', '-Va'] + list(packages),
+        python_shell=False,
+        output_loglevel='trace')
+
+    data = {}
+
+    # If verification has an output, then it means it failed
+    # and the return code will be 1. We are interested in any bigger
+    # than 1 code.
+    if ret['retcode'] > 1:
+        del ret['stdout']
+        return ret
+    elif not ret['retcode']:
+        return data
+
+    ptrn = re.compile(r"\s+")
+    changes = cfg = f_name = None
+    for f_info in ret['stdout'].splitlines():
+        f_info = ptrn.split(f_info)
+        if len(f_info) == 3:  # Config file
+            changes, cfg, f_name = f_info
+        else:
+            changes, f_name = f_info
+            cfg = None
+        keys = ['size', 'mode', 'checksum', 'device', 'symlink',
+                'owner', 'group', 'time', 'capabilities']
+        changes = list(changes)
+        if len(changes) == 8:  # Older RPMs do not support capabilities
+            changes.append(".")
+        stats = []
+        for k, v in zip(keys, changes):
+            if v != '.':
+                stats.append(k)
+        if cfg is not None:
+            stats.append('config')
+        data[f_name] = stats
+
+    if not flags:
+        return data
+
+    # Filtering
+    filtered_data = {}
+    for f_name, stats in data.items():
+        include = True
+        for param, pval in flags.items():
+            if param.startswith("_"):
+                continue
+            if (not pval and param in stats) or \
+               (pval and param not in stats):
+                include = False
+                break
+        if include:
+            filtered_data[f_name] = stats
+
+    return filtered_data
 
 
 def file_list(*packages):
@@ -138,7 +222,10 @@ def file_list(*packages):
         cmd = 'rpm -qla'
     else:
         cmd = 'rpm -ql {0}'.format(' '.join(packages))
-    ret = __salt__['cmd.run'](cmd).splitlines()
+    ret = __salt__['cmd.run'](
+            cmd,
+            python_shell=False,
+            output_loglevel='trace').splitlines()
     return {'errors': [], 'files': ret}
 
 
@@ -152,9 +239,9 @@ def file_dict(*packages):
 
     .. code-block:: bash
 
-        salt '*' lowpkg.file_list httpd
-        salt '*' lowpkg.file_list httpd postfix
-        salt '*' lowpkg.file_list
+        salt '*' lowpkg.file_dict httpd
+        salt '*' lowpkg.file_dict httpd postfix
+        salt '*' lowpkg.file_dict
     '''
     errors = []
     ret = {}
@@ -165,16 +252,79 @@ def file_dict(*packages):
         cmd = 'rpm -q --qf \'%{{NAME}} %{{VERSION}}\\n\' {0}'.format(
             ' '.join(packages)
         )
-    for line in __salt__['cmd.run'](cmd).splitlines():
+    out = __salt__['cmd.run'](cmd, python_shell=False, output_loglevel='trace')
+    for line in out.splitlines():
         if 'is not installed' in line:
             errors.append(line)
             continue
         comps = line.split()
         pkgs[comps[0]] = {'version': comps[1]}
-    for pkg in pkgs.keys():
+    for pkg in pkgs:
         files = []
         cmd = 'rpm -ql {0}'.format(pkg)
-        for line in __salt__['cmd.run'](cmd).splitlines():
+        out = __salt__['cmd.run'](cmd, python_shell=False, output_loglevel='trace')
+        for line in out.splitlines():
             files.append(line)
         ret[pkg] = files
     return {'errors': errors, 'packages': ret}
+
+
+def owner(*paths):
+    '''
+    Return the name of the package that owns the file. Multiple file paths can
+    be passed. If a single path is passed, a string will be returned,
+    and if multiple paths are passed, a dictionary of file/package name pairs
+    will be returned.
+
+    If the file is not owned by a package, or is not present on the minion,
+    then an empty string will be returned for that path.
+
+    CLI Examples:
+
+    .. code-block:: bash
+
+        salt '*' lowpkg.owner /usr/bin/apachectl
+        salt '*' lowpkg.owner /usr/bin/apachectl /etc/httpd/conf/httpd.conf
+    '''
+    if not paths:
+        return ''
+    ret = {}
+    cmd = 'rpm -qf --queryformat "%{{NAME}}" {0!r}'
+    for path in paths:
+        ret[path] = __salt__['cmd.run_stdout'](cmd.format(path),
+                                               output_loglevel='trace')
+        if 'not owned' in ret[path].lower():
+            ret[path] = ''
+    if len(ret) == 1:
+        return list(ret.values())[0]
+    return ret
+
+
+@decorators.which('rpm2cpio')
+@decorators.which('cpio')
+@decorators.which('diff')
+def diff(package, path):
+    '''
+    Return a formatted diff between current file and original in a package.
+    NOTE: this function includes all files (configuration and not), but does
+    not work on binary content.
+
+    :param package: The name of the package
+    :param path: Full path to the installed file
+    :return: Difference or empty string. For binary files only a notification.
+
+    CLI example:
+
+    .. code-block:: bash
+
+        salt '*' lowpkg.diff apache2 /etc/apache2/httpd.conf
+    '''
+
+    cmd = "rpm2cpio {0} " \
+          "| cpio -i --quiet --to-stdout .{1} " \
+          "| diff -u --label 'A {1}' --from-file=- --label 'B {1}' {1}"
+    res = __salt__['cmd.shell'](cmd.format(package, path), output_loglevel='trace')
+    if res and res.startswith('Binary file'):
+        return 'File "{0}" is binary and its content has been modified.'.format(path)
+
+    return res

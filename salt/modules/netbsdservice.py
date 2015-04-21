@@ -2,6 +2,7 @@
 '''
 The service module for NetBSD
 '''
+from __future__ import absolute_import
 
 # Import python libs
 import os
@@ -11,13 +12,16 @@ __func_alias__ = {
     'reload_': 'reload'
 }
 
+# Define the module's virtual name
+__virtualname__ = 'service'
+
 
 def __virtual__():
     '''
     Only work on NetBSD
     '''
     if __grains__['os'] == 'NetBSD' and os.path.exists('/etc/rc.subr'):
-        return 'service'
+        return __virtualname__
     return False
 
 
@@ -182,6 +186,21 @@ def available(name):
     return name in get_all()
 
 
+def missing(name):
+    '''
+    The inverse of service.available.
+    Returns ``True`` if the specified service is not available, otherwise returns
+    ``False``.
+
+    CLI Example:
+
+    .. code-block:: bash
+
+        salt '*' service.missing sshd
+    '''
+    return name not in get_all()
+
+
 def get_all():
     '''
     Return all available boot services
@@ -205,9 +224,7 @@ def _rcconf_status(name, service_status):
     newstatus = '{0}={1}'.format(name, service_status)
     ret = __salt__['cmd.retcode']('grep \'{0}\' {1}'.format(rxname, rcconf))
     if ret == 0:  # service found in rc.conf, modify its status
-        # NetBSD sed does not support -i flag, call sed by hand
-        cmd = 'cp -f {0} {0}.bak && sed -E -e s/{1}/{2}/g {0}.bak > {0}'
-        ret = __salt__['cmd.run'](cmd.format(rcconf, rxname, newstatus))
+        __salt__['file.replace'](rcconf, rxname, newstatus)
     else:
         ret = __salt__['file.append'](rcconf, newstatus)
 
@@ -240,7 +257,7 @@ def disable(name, **kwargs):
     return _rcconf_status(name, 'NO')
 
 
-def enabled(name):
+def enabled(name, **kwargs):
     '''
     Return True if the named service is enabled, false otherwise
 

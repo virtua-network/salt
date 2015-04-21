@@ -2,12 +2,14 @@
 '''
 Routines to manage interactions with the whoosh search system
 '''
+from __future__ import absolute_import
 
 # Import python libs
 import os
 
 # Import salt libs
 import salt.search
+import salt.ext.six as six
 
 # Import third party libs
 HAS_WHOOSH = False
@@ -20,12 +22,15 @@ try:
 except ImportError:
     pass
 
+# Define the module's virtual name
+__virtualname__ = 'whoosh'
+
 
 def __virtual__():
     '''
     Only load if the whoosh libs are available
     '''
-    return 'whoosh' if HAS_WHOOSH else False
+    return __virtualname__ if HAS_WHOOSH else False
 
 
 def index():
@@ -82,6 +87,6 @@ def query(qstr, limit=10):
     else:
         return {}
     qp_ = whoosh.qparser.QueryParser(u'content', schema=ix_.schema)
-    qobj = qp_.parse(unicode(qstr), limit)
+    qobj = qp_.parse(six.text_type(qstr), limit)
     with ix_.searcher() as searcher:
         return searcher.search(qobj)

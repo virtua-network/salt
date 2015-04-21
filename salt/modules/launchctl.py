@@ -4,13 +4,19 @@ Module for the management of MacOS systems that use launchd/launchctl
 
 :depends:   - plistlib Python module
 '''
+from __future__ import absolute_import
 
 # Import python libs
 import os
 import plistlib
 
 # Import salt libs
+import salt.utils
 import salt.utils.decorators as decorators
+import salt.ext.six as six
+
+# Define the module's virtual name
+__virtualname__ = 'service'
 
 
 def __virtual__():
@@ -18,7 +24,7 @@ def __virtual__():
     Only work on MacOS
     '''
     if __grains__['os'] == 'MacOS':
-        return 'service'
+        return __virtualname__
     return False
 
 
@@ -44,20 +50,27 @@ def _available_services():
         for root, dirs, files in os.walk(launch_dir):
             for filename in files:
                 file_path = os.path.join(root, filename)
+                # Follow symbolic links of files in _launchd_paths
+                true_path = os.path.realpath(file_path)
+                # ignore broken symlinks
+                if not os.path.exists(true_path):
+                    continue
 
                 try:
                     # This assumes most of the plist files will be already in XML format
-                    plist = plistlib.readPlist(file_path)
+                    with salt.utils.fopen(file_path):
+                        plist = plistlib.readPlist(true_path)
+
                 except Exception:
                     # If plistlib is unable to read the file we'll need to use
                     # the system provided plutil program to do the conversion
-                    cmd = '/usr/bin/plutil -convert xml1 -o - -- "{0}"'.format(file_path)
-                    plist_xml = __salt__['cmd.run_all'](cmd)['stdout']
+                    cmd = '/usr/bin/plutil -convert xml1 -o - -- "{0}"'.format(true_path)
+                    plist_xml = __salt__['cmd.run_all'](cmd, python_shell=False)['stdout']
                     plist = plistlib.readPlistFromString(plist_xml)
 
                 available_services[plist.Label.lower()] = {
                     'filename': filename,
-                    'file_path': file_path,
+                    'file_path': true_path,
                     'plist': plist,
                 }
 
@@ -75,7 +88,7 @@ def _service_by_name(name):
         # Match on label
         return services[name]
 
-    for service in services.values():
+    for service in six.itervalues(services):
         if service['file_path'].lower() == name:
             # Match on full path
             return service
@@ -107,7 +120,7 @@ def get_all():
     service_labels_from_list = [
         line.split("\t")[2] for line in service_lines
     ]
-    service_labels_from_services = _available_services().keys()
+    service_labels_from_services = list(_available_services().keys())
 
     return sorted(set(service_labels_from_list + service_labels_from_services))
 
@@ -115,7 +128,7 @@ def get_all():
 def _get_launchctl_data(job_label, runas=None):
     cmd = 'launchctl list -x {0}'.format(job_label)
 
-    launchctl_xml = __salt__['cmd.run_all'](cmd, runas=runas)
+    launchctl_xml = __salt__['cmd.run_all'](cmd, python_shell=False, runas=runas)
 
     if launchctl_xml['stderr'] == 'launchctl list returned unknown response':
         # The service is not loaded, further, it might not even exist
@@ -137,6 +150,20 @@ def available(job_label):
         salt '*' service.available com.openssh.sshd
     '''
     return True if _service_by_name(job_label) else False
+
+
+def missing(job_label):
+    '''
+    The inverse of service.available
+    Check that the given service is not available.
+
+    CLI Example:
+
+    .. code-block:: bash
+
+        salt '*' service.missing com.openssh.sshd
+    '''
+    return False if _service_by_name(job_label) else True
 
 
 def status(job_label, runas=None):
@@ -173,7 +200,7 @@ def stop(job_label, runas=None):
     service = _service_by_name(job_label)
     if service:
         cmd = 'launchctl unload -w {0}'.format(service['file_path'], runas=runas)
-        return not __salt__['cmd.retcode'](cmd, runas=runas)
+        return not __salt__['cmd.retcode'](cmd, runas=runas, python_shell=False)
 
     return False
 
@@ -193,7 +220,7 @@ def start(job_label, runas=None):
     service = _service_by_name(job_label)
     if service:
         cmd = 'launchctl load -w {0}'.format(service['file_path'], runas=runas)
-        return not __salt__['cmd.retcode'](cmd, runas=runas)
+        return not __salt__['cmd.retcode'](cmd, runas=runas, python_shell=False)
 
     return False
 

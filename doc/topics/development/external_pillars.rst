@@ -57,15 +57,15 @@ And then start logging. This is an idiomatic way of setting up logging in Salt:
 
 
 Finally, load modules that are specific to what you are doing. You should catch
-import errors and set a flag that the the ``__virtual__`` function can use later.
+import errors and set a flag that the ``__virtual__`` function can use later.
 
 .. code-block:: python
 
     try:
         import weird_thing
-        example_a_loaded = True
+        EXAMPLE_A_LOADED = True
     except ImportError:
-        example_a_loaded = False
+        EXAMPLE_A_LOADED = False
 
 
 Options
@@ -104,9 +104,10 @@ __virtual__
 If you define a ``__virtual__`` function, you can control whether or not this
 module is visible. If it returns ``False`` then Salt ignores this module. If
 it returns a string, then that string will be how Salt identifies this external
-pillar in its ``ext_pillar`` configuration. If this function does not exist,
-then the name Salt's ``ext_pillar`` will use to identify this module is its
-conventional name in Python.
+pillar in its ``ext_pillar`` configuration. If you're not renaming the module,
+simply return ``True`` in the ``__virtual__`` function, which is the same as if
+this function did not exist, then, the name Salt's ``ext_pillar`` will use to
+identify this module is its conventional name in Python.
 
 This is useful to write modules that can be installed on all Salt masters, but
 will only be visible if a particular piece of software your module requires is
@@ -116,20 +117,20 @@ installed.
 
     # This external pillar will be known as `example_a`
     def __virtual__():
-        if example_a_loaded:
-            return 'example_a'
-        else:
-            return False
+        if EXAMPLE_A_LOADED:
+            return True
+        return False
 
 
 .. code-block:: python
 
     # This external pillar will be known as `something_else`
+    __virtualname__ = 'something_else'
+
     def __virtual__():
-        if example_a_loaded:
-            return 'something_else'
-        else:
-            return False
+        if EXAMPLE_A_LOADED:
+            return __virtualname__
+        return False
 
 
 ext_pillar
@@ -148,15 +149,16 @@ Using our example above:
 
 .. code-block:: python
 
-    ext_pillar( pillar, 'some argument' )                   # example_a
-    ext_pillar( pillar, 'argumentA', 'argumentB' )          # example_b
-    ext_pillar( pillar, keyA='valueA', keyB='valueB' } )    # example_c
+    ext_pillar( id, pillar, 'some argument' )                   # example_a
+    ext_pillar( id, pillar, 'argumentA', 'argumentB' )          # example_b
+    ext_pillar( id, pillar, keyA='valueA', keyB='valueB' } )    # example_c
 
 
 In the ``example_a`` case, ``pillar`` will contain the items from the
 ``pillar_roots``, in ``example_b`` ``pillar``  will contain that plus the items
 added by ``example_a``, and in ``example_c`` ``pillar`` will contain that plus
-the items added by ``example_b``.
+the items added by ``example_b``. In all three cases, ``id`` will contain the
+ID of the minion making the pillar request.
 
 This function should return a dictionary, the contents of which are merged in
 with all of the other pillars and returned to the minion. **Note**: this function
@@ -164,7 +166,7 @@ is called once for each minion that fetches its pillar data.
 
 .. code-block:: python
 
-    def ext_pillar( pillar, *args, **kwargs ):
+    def ext_pillar( minion_id, pillar, *args, **kwargs ):
 
         my_pillar = {}
 
@@ -183,8 +185,7 @@ This function has access to some useful globals:
 :__opts__:
     A dictionary of mostly Salt configuration options. If you had an
     ``__opts__`` dictionary defined in your module, those values will be
-    included. Also included and most useful is ``__opts__['id']``, which
-    is the minion id of the minion asking for pillar data.
+    included.
 
 :__salt__:
     A dictionary of Salt module functions, useful so you don't have to
@@ -205,4 +206,14 @@ external pillar, add something like this to your master config:
 .. code-block:: yaml
 
     ext_pillar:
-      - cmd_json: "echo {'arg':'value'}"
+      - cmd_json: 'echo {\"arg\":\"value\"}'
+
+Reminder
+--------
+
+Just as with traditional pillars, external pillars must be refreshed in order for
+minions to see any fresh data:
+
+.. code-block:: bash
+
+    salt '*' saltutil.refresh_pillar

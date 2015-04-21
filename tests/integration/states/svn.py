@@ -1,8 +1,11 @@
+# -*- coding: utf-8 -*-
+
 '''
 Tests for the SVN state
 '''
 
 # Import python libs
+from __future__ import absolute_import
 import os
 import shutil
 import socket

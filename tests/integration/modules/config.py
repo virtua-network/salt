@@ -1,6 +1,11 @@
+# -*- coding: utf-8 -*-
+
 '''
 Validate the config system
 '''
+# Import Python libs
+from __future__ import absolute_import
+
 # Import Salt Testing libs
 from salttesting.helpers import ensure_in_syspath
 ensure_in_syspath('../../')
@@ -41,12 +46,23 @@ class ConfigTest(integration.ModuleCase):
         '''
         # This function is generally only used with cross calls, the yaml
         # interpreter is breaking it for remote calls
+        # The correct standard is the four digit form.
         self.assertEqual(
-            self.run_function('config.manage_mode', ['775']), '775')
+            self.run_function('config.manage_mode', ['"775"']), '0775')
         self.assertEqual(
-            self.run_function('config.manage_mode', ['1775']), '1775')
-        #self.assertEqual(
-        #    self.run_function('config.manage_mode', ['0775']), '775')
+            self.run_function('config.manage_mode', ['"1775"']), '01775')
+        self.assertEqual(
+            self.run_function('config.manage_mode', ['"0775"']), '0775')
+        self.assertEqual(
+            self.run_function('config.manage_mode', ['"01775"']), '01775')
+        self.assertEqual(
+            self.run_function('config.manage_mode', ['"0"']), '0000')
+        self.assertEqual(
+            self.run_function('config.manage_mode', ['775']), '0775')
+        self.assertEqual(
+            self.run_function('config.manage_mode', ['1775']), '01775')
+        self.assertEqual(
+            self.run_function('config.manage_mode', ['0']), '0000')
 
     def test_option(self):
         '''

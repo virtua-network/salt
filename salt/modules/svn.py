@@ -2,11 +2,11 @@
 '''
 Subversion SCM
 '''
+from __future__ import absolute_import
 
 # Import python libs
 import re
 import shlex
-import subprocess
 
 # Import salt libs
 from salt import utils, exceptions
@@ -19,7 +19,7 @@ def __virtual__():
     Only load if svn is installed
     '''
     if utils.which('svn'):
-        return 'svn'
+        return True
     return False
 
 
@@ -50,7 +50,7 @@ def _run_svn(cmd, cwd, user, username, password, opts, **kwargs):
     password
         Connect to the Subversion server with this password
 
-        .. versionadded:: 0.17
+        .. versionadded:: 0.17.0
 
     opts
         Any additional options to add to the command line
@@ -58,21 +58,22 @@ def _run_svn(cmd, cwd, user, username, password, opts, **kwargs):
     kwargs
         Additional options to pass to the run-cmd
     '''
-    cmd = 'svn --non-interactive {0} '.format(cmd)
-    if username:
-        opts += ('--username', username)
-    if password:
-        opts += ('--password', password)
-    if opts:
-        cmd += subprocess.list2cmdline(opts)
+    cmd = ['svn', '--non-interactive', cmd]
 
-    result = __salt__['cmd.run_all'](cmd, cwd=cwd, runas=user, **kwargs)
+    options = list(opts)
+    if username:
+        options.extend(['--username', username])
+    if password:
+        options.extend(['--password', password])
+    cmd.extend(options)
+
+    result = __salt__['cmd.run_all'](cmd, python_shell=False, cwd=cwd, runas=user, **kwargs)
 
     retcode = result['retcode']
 
     if retcode == 0:
         return result['stdout']
-    raise exceptions.CommandExecutionError(result['stderr'] + '\n\n' + cmd)
+    raise exceptions.CommandExecutionError(result['stderr'] + '\n\n' + ' '.join(cmd))
 
 
 def info(cwd,
@@ -100,7 +101,7 @@ def info(cwd,
     password : None
         Connect to the Subversion server with this password
 
-        .. versionadded:: 0.17
+        .. versionadded:: 0.17.0
 
     fmt : str
         How to fmt the output from info.
@@ -162,7 +163,7 @@ def checkout(cwd,
     password : None
         Connect to the Subversion server with this password
 
-        .. versionadded:: 0.17
+        .. versionadded:: 0.17.0
 
     CLI Example:
 
@@ -174,6 +175,45 @@ def checkout(cwd,
     if target:
         opts += (target,)
     return _run_svn('checkout', cwd, user, username, password, opts)
+
+
+def switch(cwd, remote, target=None, user=None, username=None,
+           password=None, *opts):
+    '''
+    .. versionadded:: 2014.1.0
+
+    Switch a working copy of a remote Subversion repository
+    directory
+
+    cwd
+        The path to the Subversion repository
+
+    remote : None
+        URL to switch
+
+    target : None
+        The name to give the file or directory working copy
+        Default: svn uses the remote basename
+
+    user : None
+        Run svn as a user other than what the minion runs as
+
+    username : None
+        Connect to the Subversion server as another user
+
+    password : None
+        Connect to the Subversion server with this password
+
+    CLI Example:
+
+    .. code-block:: bash
+
+        salt '*' svn.switch /path/to/repo svn://remote/repo
+    '''
+    opts += (remote,)
+    if target:
+        opts += (target,)
+    return _run_svn('switch', cwd, user, username, password, opts)
 
 
 def update(cwd, targets=None, user=None, username=None, password=None, *opts):
@@ -194,7 +234,7 @@ def update(cwd, targets=None, user=None, username=None, password=None, *opts):
     password : None
         Connect to the Subversion server with this password
 
-        .. versionadded:: 0.17
+        .. versionadded:: 0.17.0
 
     username : None
         Connect to the Subversion server as another user
@@ -231,7 +271,7 @@ def diff(cwd, targets=None, user=None, username=None, password=None, *opts):
     password : None
         Connect to the Subversion server with this password
 
-        .. versionadded:: 0.17
+        .. versionadded:: 0.17.0
 
     CLI Example:
 
@@ -274,7 +314,7 @@ def commit(cwd,
     password : None
         Connect to the Subversion server with this password
 
-        .. versionadded:: 0.17
+        .. versionadded:: 0.17.0
 
     CLI Example:
 
@@ -308,7 +348,7 @@ def add(cwd, targets, user=None, username=None, password=None, *opts):
     password : None
         Connect to the Subversion server with this password
 
-        .. versionadded:: 0.17
+        .. versionadded:: 0.17.0
 
     CLI Example:
 
@@ -349,7 +389,7 @@ def remove(cwd,
     password : None
         Connect to the Subversion server with this password
 
-        .. versionadded:: 0.17
+        .. versionadded:: 0.17.0
 
     CLI Example:
 
@@ -385,7 +425,7 @@ def status(cwd, targets=None, user=None, username=None, password=None, *opts):
     password : None
         Connect to the Subversion server with this password
 
-        .. versionadded:: 0.17
+        .. versionadded:: 0.17.0
 
     CLI Example:
 
@@ -404,6 +444,7 @@ def export(cwd,
              user=None,
              username=None,
              password=None,
+             revision='HEAD',
              *opts):
     '''
     Create an unversioned copy of a tree.
@@ -427,7 +468,7 @@ def export(cwd,
     password : None
         Connect to the Subversion server with this password
 
-        .. versionadded:: 0.17
+        .. versionadded:: 0.17.0
 
     CLI Example:
 
@@ -438,4 +479,6 @@ def export(cwd,
     opts += (remote,)
     if target:
         opts += (target,)
+    revision_args = '-r'
+    opts += (revision_args, str(revision),)
     return _run_svn('export', cwd, user, username, password, opts)

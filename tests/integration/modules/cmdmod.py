@@ -1,16 +1,34 @@
+# -*- coding: utf-8 -*-
+
 # Import python libs
+from __future__ import absolute_import
 import os
 import sys
+import textwrap
 import tempfile
 
 # Import Salt Testing libs
 from salttesting import skipIf
-from salttesting.helpers import ensure_in_syspath
+from salttesting.helpers import (
+    destructiveTest,
+    ensure_in_syspath,
+    skip_if_binaries_missing
+)
 from salttesting.mock import NO_MOCK, NO_MOCK_REASON, Mock, patch
 ensure_in_syspath('../../')
 
 # Import salt libs
 import integration
+import salt.utils
+
+
+AVAILABLE_PYTHON_EXECUTABLE = salt.utils.which_bin([
+    'python',
+    'python2',
+    'python2.6',
+    'python2.7'
+
+])
 
 
 @skipIf(NO_MOCK, NO_MOCK_REASON)
@@ -31,19 +49,32 @@ class CMDModuleTest(integration.ModuleCase):
         self.assertEqual(
             self.run_function('cmd.run',
                               ['echo $SHELL',
-                               'shell={0}'.format(shell)]).rstrip(),
-            shell)
+                               'shell={0}'.format(shell)],
+                              python_shell=True).rstrip(), shell)
+        self.assertEqual(self.run_function('cmd.run',
+                          ['ls / | grep etc'],
+                          python_shell=True), 'etc')
+        self.assertEqual(self.run_function('cmd.run',
+                         ['echo {{grains.id}} | awk "{print $1}"'],
+                         template='jinja',
+                         python_shell=True), 'minion')
+        self.assertEqual(self.run_function('cmd.run',
+                         ['grep f'],
+                         stdin='one\ntwo\nthree\nfour\nfive\n'), 'four\nfive')
+        self.assertEqual(self.run_function('cmd.run',
+                         ['echo "a=b" | sed -e s/=/:/g'],
+                         python_shell=True), 'a:b')
 
     @patch('pwd.getpwnam')
     @patch('subprocess.Popen')
-    @patch('json.loads')
-    def test_os_environment_remains_intact(self, *mocks):
+    def test_os_environment_remains_intact(self,
+                                           popen_mock,
+                                           getpwnam_mock):
         '''
         Make sure the OS environment is not tainted after running a command
         that specifies runas.
         '''
         environment = os.environ.copy()
-        loads_mock, popen_mock, getpwnam_mock = mocks
 
         popen_mock.return_value = Mock(
             communicate=lambda *args, **kwags: ['{}', None],
@@ -51,12 +82,10 @@ class CMDModuleTest(integration.ModuleCase):
             retcode=0
         )
 
-        loads_mock.return_value = {'data': {'USER': 'foo'}}
-
         from salt.modules import cmdmod
 
-        cmdmod.__grains__ = {'os': 'darwin'}
-        if sys.platform.startswith('freebsd'):
+        cmdmod.__grains__ = {'os': 'Darwin', 'os_family': 'Solaris'}
+        if sys.platform.startswith(('freebsd', 'openbsd')):
             shell = '/bin/sh'
         else:
             shell = '/bin/bash'
@@ -69,10 +98,9 @@ class CMDModuleTest(integration.ModuleCase):
 
             environment2 = os.environ.copy()
 
-            self.assertEquals(environment, environment2)
+            self.assertEqual(environment, environment2)
 
             getpwnam_mock.assert_called_with('foobar')
-            loads_mock.assert_called_with('{}')
         finally:
             delattr(cmdmod, '__grains__')
 
@@ -88,14 +116,14 @@ class CMDModuleTest(integration.ModuleCase):
         '''
         cmd.run_stderr
         '''
-        if sys.platform.startswith('freebsd'):
+        if sys.platform.startswith(('freebsd', 'openbsd')):
             shell = '/bin/sh'
         else:
             shell = '/bin/bash'
 
         self.assertEqual(self.run_function('cmd.run_stderr',
                                            ['echo "cheese" 1>&2',
-                                            'shell={0}'.format(shell)]
+                                            'shell={0}'.format(shell)], python_shell=True
                                            ).rstrip(),
                          'cheese')
 
@@ -103,15 +131,15 @@ class CMDModuleTest(integration.ModuleCase):
         '''
         cmd.run_all
         '''
-        from salt._compat import string_types
+        from six import string_types
 
-        if sys.platform.startswith('freebsd'):
+        if sys.platform.startswith(('freebsd', 'openbsd')):
             shell = '/bin/sh'
         else:
             shell = '/bin/bash'
 
         ret = self.run_function('cmd.run_all', ['echo "cheese" 1>&2',
-                                                'shell={0}'.format(shell)])
+                                                'shell={0}'.format(shell)], python_shell=True)
         self.assertTrue('pid' in ret)
         self.assertTrue('retcode' in ret)
         self.assertTrue('stdout' in ret)
@@ -126,9 +154,37 @@ class CMDModuleTest(integration.ModuleCase):
         '''
         cmd.retcode
         '''
-        self.assertEqual(self.run_function('cmd.retcode', ['exit 0']), 0)
-        self.assertEqual(self.run_function('cmd.retcode', ['exit 1']), 1)
+        self.assertEqual(self.run_function('cmd.retcode', ['exit 0'], python_shell=True), 0)
+        self.assertEqual(self.run_function('cmd.retcode', ['exit 1'], python_shell=True), 1)
 
+    def test_script(self):
+        '''
+        cmd.script
+        '''
+        args = 'saltines crackers biscuits=yes'
+        script = 'salt://script.py'
+        ret = self.run_function('cmd.script', [script, args])
+        self.assertEqual(ret['stdout'], args)
+
+    def test_script_retcode(self):
+        '''
+        cmd.script_retcode
+        '''
+        script = 'salt://script.py'
+        ret = self.run_function('cmd.script_retcode', [script])
+        self.assertEqual(ret, 0)
+
+    @destructiveTest
+    def test_tty(self):
+        '''
+        cmd.tty
+        '''
+        for tty in ('tty0', 'pts3'):
+            if os.path.exists(os.path.join('/dev', tty)):
+                ret = self.run_function('cmd.tty', [tty, 'apply salt liberally'])
+                self.assertTrue('Success' in ret)
+
+    @skip_if_binaries_missing(['which'])
     def test_which(self):
         '''
         cmd.which
@@ -136,11 +192,21 @@ class CMDModuleTest(integration.ModuleCase):
         self.assertEqual(self.run_function('cmd.which', ['cat']).rstrip(),
                          self.run_function('cmd.run', ['which cat']).rstrip())
 
+    @skip_if_binaries_missing(['which'])
+    def test_which_bin(self):
+        '''
+        cmd.which_bin
+        '''
+        cmds = ['pip2', 'pip', 'pip-python']
+        ret = self.run_function('cmd.which_bin', [cmds])
+        self.assertTrue(os.path.split(ret)[1] in cmds)
+
     def test_has_exec(self):
         '''
         cmd.has_exec
         '''
-        self.assertTrue(self.run_function('cmd.has_exec', ['python']))
+        self.assertTrue(self.run_function('cmd.has_exec',
+                                          [AVAILABLE_PYTHON_EXECUTABLE]))
         self.assertFalse(self.run_function('cmd.has_exec',
                                            ['alllfsdfnwieulrrh9123857ygf']))
 
@@ -148,12 +214,12 @@ class CMDModuleTest(integration.ModuleCase):
         '''
         cmd.exec_code
         '''
-        code = '''
-import sys
-sys.stdout.write('cheese')
-        '''
+        code = textwrap.dedent('''\
+               import sys
+               sys.stdout.write('cheese')''')
         self.assertEqual(self.run_function('cmd.exec_code',
-                                           ['python', code]).rstrip(),
+                                           [AVAILABLE_PYTHON_EXECUTABLE,
+                                            code]).rstrip(),
                          'cheese')
 
     def test_quotes(self):
@@ -175,7 +241,7 @@ sys.stdout.write('cheese')
 
         try:
             runas = os.getlogin()
-        except:
+        except:  # pylint: disable=W0702
             # On some distros (notably Gentoo) os.getlogin() fails
             import pwd
             runas = pwd.getpwuid(os.getuid())[0]
@@ -188,9 +254,11 @@ sys.stdout.write('cheese')
         '''
         cmd.run trigger timeout
         '''
+        out = self.run_function('cmd.run', ['sleep 2 && echo hello', 'timeout=1'])
+
         self.assertTrue(
             'Timed out' in self.run_function(
-                'cmd.run', ['sleep 2 && echo hello', 'timeout=1']))
+                'cmd.run', ['sleep 2 && echo hello', 'timeout=1'], python_shell=True))
 
     def test_timeout_success(self):
         '''
@@ -198,7 +266,7 @@ sys.stdout.write('cheese')
         '''
         self.assertTrue(
             'hello' == self.run_function(
-                'cmd.run', ['sleep 1 && echo hello', 'timeout=2']))
+                'cmd.run', ['sleep 1 && echo hello', 'timeout=2'], python_shell=True))
 
     def test_run_cwd_doesnt_exist_issue_7154(self):
         '''

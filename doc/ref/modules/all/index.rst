@@ -9,7 +9,6 @@ Full list of builtin execution modules
     .. toctree::
 
         salt.modules.pkg
-        salt.modules.sys
 
 .. currentmodule:: salt.modules
 
@@ -20,55 +19,119 @@ Full list of builtin execution modules
     aliases
     alternatives
     apache
-    apt
+    aptpkg
     archive
+    artifactory
     at
     augeas_cfg
+    aws_sqs
+    blockdev
     bluez
+    boto_asg
+    boto_cfn
+    boto_cloudwatch
+    boto_dynamodb
+    boto_ec2
+    boto_elasticache
+    boto_elb
+    boto_iam
+    boto_rds
+    boto_route53
+    boto_secgroup
+    boto_sns
+    boto_sqs
+    boto_vpc
+    bower
     brew
     bridge
     bsd_shadow
+    btrfs
+    cabal
     cassandra
+    cassandra_cql
+    chef
+    chocolatey
+    cloud
     cmdmod
+    composer
     config
+    container_resource
     cp
+    cpan
     cron
+    cyg
     daemontools
+    darwin_pkgutil
     darwin_sysctl
     data
     ddns
+    deb_apache
+    deb_postgres
     debconfmod
+    debian_ip
     debian_service
+    defaults
+    devmap
     dig
     disk
     djangomod
     dnsmasq
     dnsutil
+    dockerio
+    dockerng
     dpkg
+    drac
+    drbd
     ebuild
     eix
+    elasticsearch
+    environ
     eselect
+    etcd_mod
     event
     extfs
     file
+    firewalld
     freebsd_sysctl
     freebsdjail
     freebsdkmod
     freebsdpkg
+    freebsdports
     freebsdservice
     gem
+    genesis
     gentoo_service
     gentoolkitmod
     git
     glance
+    glusterfs
+    gnomedesktop
+    gpg
     grains
     groupadd
     grub_legacy
     guestfs
+    hadoop
+    haproxyconn
+    hashutil
     hg
+    hipchat
     hosts
+    htpasswd
+    http
+    ilo
     img
+    incron
+    influx
+    ini_manage
+    introspect
+    ipmi
+    ipset
     iptables
+    jboss7
+    jboss7_cli
+    junos
+    kerberos
     key
     keyboard
     keystone
@@ -81,33 +144,52 @@ Full list of builtin execution modules
     linux_sysctl
     localemod
     locate
+    logadm
     logrotate
+    lvs
     lxc
     mac_group
     mac_user
+    macports
     makeconf
     match
     mdadm
+    memcached
     mine
+    mod_random
     modjk
     mongodb
     monit
     moosefs
     mount
+    mssql
     munin
     mysql
+    nacl
+    nagios
+    nagios_rpc
     netbsd_sysctl
     netbsdservice
+    netscaler
     network
+    neutron
     nfs3
+    nftables
     nginx
     nova
     npm
-    nzbget
+    nspawn
+    omapi
+    openbsd_sysctl
     openbsdpkg
+    openbsdrcctl
     openbsdservice
+    openstack_config
+    oracle
+    osquery
     osxdesktop
     pacman
+    pagerduty
     pam
     parted
     pecl
@@ -118,69 +200,122 @@ Full list of builtin execution modules
     pkgng
     pkgutil
     portage_config
+    postfix
     postgres
     poudriere
+    powerpath
     ps
     publish
     puppet
+    pushover_notify
     pw_group
     pw_user
+    pyenv
     qemu_img
     qemu_nbd
     quota
     rabbitmq
+    raet_publish
+    random_org
     rbenv
+    rdp
+    redismod
     reg
+    rest_package
+    rest_sample
+    rest_service
     ret
     rh_ip
     rh_service
+    riak
     rpm
+    rsync
+    runit
     rvm
     s3
+    saltcloudmod
     saltutil
+    schedule
+    scsi
+    sdb
     seed
     selinux
+    sensors
+    serverdensity_device
     service
     shadow
+    slack_notify
     smartos_imgadm
     smartos_vmadm
+    smbios
     smf
+    smtp
+    softwareupdate
     solaris_group
     solaris_shadow
     solaris_user
+    solarisips
     solarispkg
     solr
+    splunk_search
     sqlite3
     ssh
     state
     status
+    sudo
     supervisord
     svn
+    swift
     sysbench
+    syslog_ng
     sysmod
+    sysrc
     system
     systemd
     test
+    test_virtual
     timezone
     tls
     tomcat
+    tuned
+    twilio_notify
     upstart
+    uptime
     useradd
+    uwsgi
+    varnish
+    vbox_guest
     virt
     virtualenv_mod
+    win_autoruns
+    win_dacl
     win_disk
+    win_dns_client
     win_file
+    win_firewall
     win_groupadd
+    win_ip
     win_network
+    win_ntp
+    win_path
     win_pkg
+    win_repo
+    win_servermanager
     win_service
     win_shadow
     win_status
     win_system
+    win_timezone
+    win_update
     win_useradd
+    x509
     xapi
+    xfs
+    xmpp
     yumpkg
-    yumpkg5
+    zcbuildout
     zfs
+    zk_concurrency
+    znc
     zpool
     zypper

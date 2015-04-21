@@ -10,7 +10,12 @@ Full list of builtin auth modules
     :toctree:
     :template: autosummary.rst.tmpl
 
+    auto
+    django
     keystone
     ldap
+    mysql
     pam
+    pki
     stormpath_mod
+    yubico

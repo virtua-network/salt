@@ -1,14 +1,14 @@
 # -*- coding: utf-8 -*-
 '''
     :codeauthor: :email:`Pedro Algarvio (pedro@algarvio.me)`
-    :copyright: © 2013 by the SaltStack Team, see AUTHORS for more details
-    :license: Apache 2.0, see LICENSE for more details.
 
 
     tests.unit.pillar_test
     ~~~~~~~~~~~~~~~~~~~~~~
 '''
 
+# Import python libs
+from __future__ import absolute_import
 import tempfile
 
 # Import Salt Testing libs
@@ -20,6 +20,7 @@ ensure_in_syspath('../')
 # Import salt libs
 import salt.pillar
 
+
 @skipIf(NO_MOCK, NO_MOCK_REASON)
 class PillarTestCase(TestCase):
 
@@ -29,6 +30,7 @@ class PillarTestCase(TestCase):
             'renderer': 'json',
             'state_top': '',
             'pillar_roots': [],
+            'file_roots': [],
             'extension_modules': ''
         }
         grains = {
@@ -109,6 +111,7 @@ class PillarTestCase(TestCase):
             'pillar_roots': [],
             'extension_modules': '',
             'environment': 'base',
+            'file_roots': [],
         }
         grains = {
             'os': 'Ubuntu',
@@ -170,3 +173,8 @@ ssh:
             }[sls]
 
         client.get_state.side_effect = get_state
+
+
+if __name__ == '__main__':
+    from integration import run_tests
+    run_tests(PillarTestCase, needs_daemon=False)
