@@ -4,17 +4,16 @@
 External Authentication System
 ==============================
 
-Salt's External Authentication System (eAuth) allows for Salt to  pass through
+Salt's External Authentication System (eAuth) allows for Salt to pass through
 command authorization to any external authentication system, such as PAM or LDAP.
 
 .. note::
 
-    eAuth using the PAM external auth system requires salt-master to be run as 
+    eAuth using the PAM external auth system requires salt-master to be run as
     root as this system needs root access to check authentication.
 
-Access Control System
----------------------
-
+External Authentication System Configuration
+============================================
 The external authentication system allows for specific users to be granted
 access to execute specific functions on specific minions. Access is configured
 in the master configuration file and uses the :ref:`access control system
@@ -35,7 +34,13 @@ The above configuration allows the user ``thatch`` to execute functions
 in the test and network modules on the minions that match the web* target.
 User ``steve`` is given unrestricted access to minion commands.
 
+Salt respects the current PAM configuration in place, and uses the 'login'
+service to authenticate.
+
 .. note:: The PAM module does not allow authenticating as ``root``.
+
+.. note:: state.sls and state.highstate will return "Failed to authenticate!"
+   if the request timeout is reached.  Use -t flag to increase the timeout
 
 To allow access to :ref:`wheel modules <all-salt.wheel>` or :ref:`runner
 modules <all-salt.runners>` the following ``@`` syntax must be used:
@@ -57,15 +62,39 @@ modules <all-salt.runners>` the following ``@`` syntax must be used:
     Globs will not match wheel or runners! They must be explicitly
     allowed with @wheel or @runner.
 
-The external authentication system can then be used from the command-line by
-any user on the same system as the master with the ``-a`` option:
+.. warning::
+    All users that have external authentication privileges are allowed to run
+    :mod:`saltutil.findjob <salt.modules.saltutil.find_job>`. Be aware
+    that this could inadvertently expose some data such as minion IDs.
 
-.. code-block:: bash
+Matching syntax
+---------------
 
-    $ salt -a pam web\* test.ping
+The structure of the ``external_auth`` dictionary can take the following
+shapes. Function matches are regular expressions; minion matches are compound
+targets.
 
-The system will ask the user for the credentials required by the
-authentication system and then publish the command.
+By user:
+
+.. code-block:: yaml
+
+    external_auth:
+      <eauth backend>:
+        <user or group%>:
+          - <regex to match function>
+
+By user, by minion:
+
+.. code-block:: yaml
+
+    external_auth:
+      <eauth backend>:
+        <user or group%>:
+          <minion compound target>:
+            - <regex to match function>
+
+Groups
+------
 
 To apply permissions to a group of users in an external authentication system,
 append a ``%`` to the ID:
@@ -77,6 +106,55 @@ append a ``%`` to the ID:
         admins%:
           - '*':
             - 'pkg.*'
+
+Limiting by function arguments
+------------------------------
+
+Positional arguments or keyword arguments to functions can also be whitelisted.
+
+.. versionadded:: 2016.3.0
+
+.. code-block:: yaml
+
+    external_auth:
+      pam:
+        my_user:
+          - '*':
+            - 'my_mod.*':
+              args:
+                - 'a.*'
+                - 'b.*'
+              kwargs:
+                'kwa': 'kwa.*'
+                'kwb': 'kwb'
+
+The rules:
+
+1. The arguments values are matched as regexp.
+2. If arguments restrictions are specified the only matched are allowed.
+3. If an argument isn't specified any value is allowed.
+4. To skip an arg use "everything" regexp ``.*``. I.e. if ``arg0`` and ``arg2``
+   should be limited but ``arg1`` and other arguments could have any value use:
+
+   .. code-block:: yaml
+
+       args:
+         - 'value0'
+         - '.*'
+         - 'value2'
+
+Usage
+=====
+
+The external authentication system can then be used from the command-line by
+any user on the same system as the master with the ``-a`` option:
+
+.. code-block:: bash
+
+    $ salt -a pam web\* test.ping
+
+The system will ask the user for the credentials required by the
+authentication system and then publish the command.
 
 .. _salt-token-generation:
 
@@ -93,7 +171,7 @@ adding a ``-T`` option when authenticating:
 
     $ salt -T -a pam web\* test.ping
 
-Now a token will be created that has a expiration of 12 hours (by default).
+Now a token will be created that has an expiration of 12 hours (by default).
 This token is stored in a file named ``salt_token`` in the active user's home
 directory.
 
@@ -104,8 +182,7 @@ Token expiration time can be set in the Salt master config file.
 
 
 LDAP and Active Directory
--------------------------
-
+=========================
 .. note::
 
     LDAP usage requires that you have installed python-ldap.
@@ -113,43 +190,83 @@ LDAP and Active Directory
 Salt supports both user and group authentication for LDAP (and Active Directory
 accessed via its LDAP interface)
 
+OpenLDAP and similar systems
+----------------------------
 LDAP configuration happens in the Salt master configuration file.
 
 Server configuration values and their defaults:
 
 .. code-block:: yaml
 
+    # Server to auth against
     auth.ldap.server: localhost
+
+    # Port to connect via
     auth.ldap.port: 389
+
+    # Use TLS when connecting
     auth.ldap.tls: False
+
+    # LDAP scope level, almost always 2
     auth.ldap.scope: 2
-    auth.ldap.uri: ''
-    auth.ldap.tls: False
+
+    # Server specified in URI format
+    auth.ldap.uri: ''    # Overrides .ldap.server, .ldap.port, .ldap.tls above
+
+    # Verify server's TLS certificate
     auth.ldap.no_verify: False
+
+    # Bind to LDAP anonymously to determine group membership
+    # Active Directory does not allow anonymous binds without special configuration
     auth.ldap.anonymous: False
+
+    # FOR TESTING ONLY, this is a VERY insecure setting.
+    # If this is True, the LDAP bind password will be ignored and
+    # access will be determined by group membership alone with
+    # the group memberships being retrieved via anonymous bind
+    auth.ldap.auth_by_group_membership_only: False
+
+    # Require authenticating user to be part of this Organizational Unit
+    # This can be blank if your LDAP schema does not use this kind of OU
     auth.ldap.groupou: 'Groups'
+
+    # Object Class for groups.  An LDAP search will be done to find all groups of this
+    # class to which the authenticating user belongs.
     auth.ldap.groupclass: 'posixGroup'
+
+    # Unique ID attribute name for the user
     auth.ldap.accountattributename: 'memberUid'
 
     # These are only for Active Directory
     auth.ldap.activedirectory: False
     auth.ldap.persontype: 'person'
 
-Salt also needs to know which Base DN to search for users and groups and
-the DN to bind to:
+    auth.ldap.minion_stripdomains: []
+
+There are two phases to LDAP authentication.  First, Salt authenticates to search for a users' Distinguished Name
+and group membership.  The user it authenticates as in this phase is often a special LDAP system user with
+read-only access to the LDAP directory.  After Salt searches the directory to determine the actual user's DN
+and groups, it re-authenticates as the user running the Salt commands.
+
+If you are already aware of the structure of your DNs and permissions in your LDAP store are set such that
+users can look up their own group memberships, then the first and second users can be the same.  To tell Salt this is
+the case, omit the ``auth.ldap.bindpw`` parameter.  You can template the ``binddn`` like this:
 
 .. code-block:: yaml
 
     auth.ldap.basedn: dc=saltstack,dc=com
-    auth.ldap.binddn: cn=admin,dc=saltstack,dc=com
+    auth.ldap.binddn: uid={{ username }},cn=users,cn=accounts,dc=saltstack,dc=com
 
-To bind to a DN, a password is required
+Salt will use the password entered on the salt command line in place of the bindpw.
+
+To use two separate users, specify the LDAP lookup user in the binddn directive, and include a bindpw like so
 
 .. code-block:: yaml
 
+    auth.ldap.binddn: uid=ldaplookup,cn=sysaccounts,cn=etc,dc=saltstack,dc=com
     auth.ldap.bindpw: mypassword
 
-Salt uses a filter to find the DN associated with a user. Salt
+As mentioned before, Salt uses a filter to find the DN associated with a user. Salt
 substitutes the ``{{ username }}`` value for the username when querying LDAP
 
 .. code-block:: yaml
@@ -165,6 +282,19 @@ the results are filtered against ``auth.ldap.groupclass``, default
 
     auth.ldap.groupou: Groups
 
+When using the `ldap('DC=domain,DC=com')` eauth operator, sometimes the records returned
+from LDAP or Active Directory have fully-qualified domain names attached, while minion IDs
+instead are simple hostnames.  The parameter below allows the administrator to strip
+off a certain set of domain names so the hostnames looked up in the directory service
+can match the minion IDs.
+               
+.. code-block:: yaml
+
+   auth.ldap.minion_stripdomains: ['.external.bigcorp.com', '.internal.bigcorp.com']
+
+Active Directory
+----------------
+
 Active Directory handles group membership differently, and does not utilize the
 ``groupou`` configuration variable.  AD needs the following options in
 the master config:
@@ -179,8 +309,8 @@ the master config:
 
 To determine group membership in AD, the username and password that is entered
 when LDAP is requested as the eAuth mechanism on the command line is used to
-bind to AD's LDAP interface.  If this fails, then it doesn't matter what groups
-the user belongs to, he or she is denied access.  Next, the distinguishedName
+bind to AD's LDAP interface. If this fails, then it doesn't matter what groups
+the user belongs to, he or she is denied access. Next, the ``distinguishedName``
 of the user is looked up with the following LDAP search:
 
 .. code-block:: text
@@ -190,7 +320,7 @@ of the user is looked up with the following LDAP search:
     )
 
 This should return a distinguishedName that we can use to filter for group
-membership.  Then the following LDAP quey is executed:
+membership.  Then the following LDAP query is executed:
 
 .. code-block:: text
 
@@ -204,15 +334,29 @@ membership.  Then the following LDAP quey is executed:
     external_auth:
       ldap:
         test_ldap_user:
-          - '*':
-            - test.ping
+            - '*':
+                - test.ping
 
-To configure an LDAP group, append a ``%`` to the ID:
+To configure a LDAP group, append a ``%`` to the ID:
 
 .. code-block:: yaml
 
     external_auth:
-    ldap:
+      ldap:
         test_ldap_group%:
           - '*':
             - test.echo
+
+In addition, if there are a set of computers in the directory service that should
+be part of the eAuth definition, they can be specified like this:
+
+.. code-block:: yaml
+
+    external_auth:
+      ldap:
+        test_ldap_group%:
+          - ldap('DC=corp,DC=example,DC=com'):
+            - test.echo
+
+The string inside `ldap()` above is any valid LDAP/AD tree limiter.  `OU=` in
+particular is permitted as long as it would return a list of computer objects.

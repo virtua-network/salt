@@ -3,9 +3,10 @@
 from __future__ import absolute_import, print_function
 import hashlib
 import logging
+import os
 import distutils.version  # pylint: disable=no-name-in-module
 
-__virtualname__ = 'rest_tornado'
+__virtualname__ = os.path.abspath(__file__).rsplit('/')[-2] or 'rest_tornado'
 
 logger = logging.getLogger(__virtualname__)
 
@@ -41,7 +42,7 @@ def start():
     '''
     try:
         from . import saltnado
-    except ImportError:
+    except ImportError as err:
         logger.error('ImportError! {0}'.format(str(err)))
         return None
 
@@ -49,6 +50,12 @@ def start():
 
     if 'num_processes' not in mod_opts:
         mod_opts['num_processes'] = 1
+
+    if mod_opts['num_processes'] > 1 and mod_opts.get('debug', False) is True:
+        raise Exception((
+            'Tornado\'s debug implementation is not compatible with multiprocess. '
+            'Either disable debug, or set num_processes to 1.'
+        ))
 
     paths = [
         (r"/", saltnado.SaltAPIHandler),
@@ -66,7 +73,7 @@ def start():
     if mod_opts.get('websockets', False):
         from . import saltnado_websockets
 
-        token_pattern = r"([0-9A-Fa-f]{0})".format(len(getattr(hashlib, __opts__.get('hash_type', 'md5'))().hexdigest()))
+        token_pattern = r"([0-9A-Fa-f]{{{0}}})".format(len(getattr(hashlib, __opts__.get('hash_type', 'md5'))().hexdigest()))
         all_events_pattern = r"/all_events/{0}".format(token_pattern)
         formatted_events_pattern = r"/formatted_events/{0}".format(token_pattern)
         logger.debug("All events URL pattern is {0}".format(all_events_pattern))
@@ -85,7 +92,6 @@ def start():
     application.opts = __opts__
     application.mod_opts = mod_opts
     application.auth = salt.auth.LoadAuth(__opts__)
-    application.event_listener = saltnado.EventListener(mod_opts, __opts__)
 
     # the kwargs for the HTTPServer
     kwargs = {}
@@ -111,7 +117,7 @@ def start():
                          )
         http_server.start(mod_opts['num_processes'])
     except:
-        print('Rest_tornado unable to bind to port {0}'.format(mod_opts['port']))
+        logger.error('Rest_tornado unable to bind to port {0}'.format(mod_opts['port']), exc_info=True)
         raise SystemExit(1)
 
     try:

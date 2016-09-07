@@ -28,6 +28,11 @@ class StateModuleTest(integration.ModuleCase,
 
     maxDiff = None
 
+    @classmethod
+    def setUpClass(cls):
+        mod_case = integration.ModuleCase()
+        mod_case.run_function('saltutil.sync_all')
+
     def test_show_highstate(self):
         '''
         state.show_highstate
@@ -112,9 +117,19 @@ class StateModuleTest(integration.ModuleCase,
         '''
         self._remove_request_cache_file()
 
-        self.run_function('state.request', mods='modules.state.requested')
+        if salt.utils.is_windows():
+            self.run_function('state.request', mods='modules.state.requested_win')
+        else:
+            self.run_function('state.request', mods='modules.state.requested')
+
         ret = self.run_function('state.run_request')
-        result = ret['cmd_|-count_root_dir_contents_|-ls -a / | wc -l_|-run']['result']
+
+        if salt.utils.is_windows():
+            key = 'cmd_|-count_root_dir_contents_|-Get-ChildItem C:\\\\ | Measure-Object | %{$_.Count}_|-run'
+        else:
+            key = 'cmd_|-count_root_dir_contents_|-ls -a / | wc -l_|-run'
+
+        result = ret[key]['result']
         self.assertTrue(result)
 
     def test_run_request_failed_no_request_staged(self):
@@ -145,17 +160,33 @@ class StateModuleTest(integration.ModuleCase,
         ret = self.run_function('state.sls', mods='testappend.step-2')
         self.assertSaltTrueReturn(ret)
 
-        self.assertMultiLineEqual(textwrap.dedent('''\
+        with salt.utils.fopen(testfile, 'r') as fp_:
+            testfile_contents = fp_.read()
+
+        contents = textwrap.dedent('''\
             # set variable identifying the chroot you work in (used in the prompt below)
             if [ -z "$debian_chroot" ] && [ -r /etc/debian_chroot ]; then
                 debian_chroot=$(cat /etc/debian_chroot)
             fi
+            ''')
 
+        if not salt.utils.is_windows():
+            contents += os.linesep
+
+        contents += textwrap.dedent('''\
             # enable bash completion in interactive shells
             if [ -f /etc/bash_completion ] && ! shopt -oq posix; then
                 . /etc/bash_completion
             fi
-            '''), salt.utils.fopen(testfile, 'r').read())
+            ''')
+
+        if salt.utils.is_windows():
+            new_contents = contents.splitlines()
+            contents = os.linesep.join(new_contents)
+            contents += os.linesep
+
+        self.assertMultiLineEqual(
+                contents, testfile_contents)
 
         # Re-append switching order
         ret = self.run_function('state.sls', mods='testappend.step-2')
@@ -164,17 +195,10 @@ class StateModuleTest(integration.ModuleCase,
         ret = self.run_function('state.sls', mods='testappend.step-1')
         self.assertSaltTrueReturn(ret)
 
-        self.assertMultiLineEqual(textwrap.dedent('''\
-            # set variable identifying the chroot you work in (used in the prompt below)
-            if [ -z "$debian_chroot" ] && [ -r /etc/debian_chroot ]; then
-                debian_chroot=$(cat /etc/debian_chroot)
-            fi
+        with salt.utils.fopen(testfile, 'r') as fp_:
+            testfile_contents = fp_.read()
 
-            # enable bash completion in interactive shells
-            if [ -f /etc/bash_completion ] && ! shopt -oq posix; then
-                . /etc/bash_completion
-            fi
-            '''), salt.utils.fopen(testfile, 'r').read())
+        self.assertMultiLineEqual(contents, testfile_contents)
 
     def test_issue_1876_syntax_error(self):
         '''
@@ -193,13 +217,13 @@ class StateModuleTest(integration.ModuleCase,
         testfile = os.path.join(integration.TMP, 'issue-1876')
         sls = self.run_function('state.sls', mods='issue-1876')
         self.assertIn(
-            'ID {0!r} in SLS \'issue-1876\' contains multiple state '
+            'ID \'{0}\' in SLS \'issue-1876\' contains multiple state '
             'declarations of the same type'.format(testfile),
             sls
         )
 
     def test_issue_1879_too_simple_contains_check(self):
-        contents = textwrap.dedent('''\
+        expected = textwrap.dedent('''\
             # set variable identifying the chroot you work in (used in the prompt below)
             if [ -z "$debian_chroot" ] && [ -r /etc/debian_chroot ]; then
                 debian_chroot=$(cat /etc/debian_chroot)
@@ -209,6 +233,12 @@ class StateModuleTest(integration.ModuleCase,
                 . /etc/bash_completion
             fi
             ''')
+
+        if salt.utils.is_windows():
+            new_contents = expected.splitlines()
+            expected = os.linesep.join(new_contents)
+            expected += os.linesep
+
         testfile = os.path.join(integration.TMP, 'issue-1879')
         # Delete if exiting
         if os.path.isfile(testfile):
@@ -232,10 +262,9 @@ class StateModuleTest(integration.ModuleCase,
 
         # Does it match?
         try:
-            self.assertMultiLineEqual(
-                contents,
-                salt.utils.fopen(testfile, 'r').read()
-            )
+            with salt.utils.fopen(testfile, 'r') as fp_:
+                contents = fp_.read()
+            self.assertMultiLineEqual(expected, contents)
             # Make sure we don't re-append existing text
             ret = self.run_function(
                 'state.sls', mods='issue-1879.step-1', timeout=120
@@ -246,10 +275,10 @@ class StateModuleTest(integration.ModuleCase,
                 'state.sls', mods='issue-1879.step-2', timeout=120
             )
             self.assertSaltTrueReturn(ret)
-            self.assertMultiLineEqual(
-                contents,
-                salt.utils.fopen(testfile, 'r').read()
-            )
+
+            with salt.utils.fopen(testfile, 'r') as fp_:
+                contents = fp_.read()
+            self.assertMultiLineEqual(expected, contents)
         except Exception:
             if os.path.exists(testfile):
                 shutil.copy(testfile, testfile + '.bak')
@@ -321,7 +350,8 @@ class StateModuleTest(integration.ModuleCase,
             'files', 'file', 'base', 'issue-2068-template-str-no-dot.sls'
         )
 
-        template = salt.utils.fopen(template_path, 'r').read()
+        with salt.utils.fopen(template_path, 'r') as fp_:
+            template = fp_.read()
         try:
             ret = self.run_function(
                 'state.template_str', [template], timeout=120
@@ -362,7 +392,8 @@ class StateModuleTest(integration.ModuleCase,
             'files', 'file', 'base', 'issue-2068-template-str.sls'
         )
 
-        template = salt.utils.fopen(template_path, 'r').read()
+        with salt.utils.fopen(template_path, 'r') as fp_:
+            template = fp_.read()
         try:
             ret = self.run_function(
                 'state.template_str', [template], timeout=120
@@ -692,6 +723,13 @@ class StateModuleTest(integration.ModuleCase,
         #ret = self.run_function('state.sls', mods='requisites.fullsls_prereq')
         #self.assertEqual(['sls command can only be used with require requisite'], ret)
 
+    def test_requisites_full_sls_import(self):
+        '''
+        Test full sls requisite with nothing but an import
+        '''
+        ret = self.run_function('state.sls', mods='requisites.fullsls_require_import')
+        self.assertSaltTrueReturn(ret)
+
     def test_requisites_prereq_simple_ordering_and_errors(self):
         '''
         Call sls file containing several prereq_in and prereq.
@@ -848,11 +886,9 @@ class StateModuleTest(integration.ModuleCase,
             + '                       foobar: C\n'
         )
 
-        # issue #8211, chaining complex prereq & prereq_in
-        # TODO: Actually this test fails
-        #ret = self.run_function('state.sls', mods='requisites.prereq_complex')
-        #result = self.normalize_ret(ret)
-        #self.assertEqual(expected_result_complex, result)
+        ret = self.run_function('state.sls', mods='requisites.prereq_complex')
+        result = self.normalize_ret(ret)
+        self.assertEqual(expected_result_complex, result)
 
         # issue #8210 : prereq recursion undetected
         # TODO: this test fails
@@ -861,6 +897,9 @@ class StateModuleTest(integration.ModuleCase,
         #    ret,
         #    ['A recursive requisite was found, SLS "requisites.prereq_recursion_error" ID "B" ID "A"']
         #)
+    def test_infinite_recursion_sls_prereq(self):
+        ret = self.run_function('state.sls', mods='requisites.prereq_sls_infinite_recursion')
+        self.assertSaltTrueReturn(ret)
 
     def test_requisites_use(self):
         '''
@@ -926,7 +965,31 @@ class StateModuleTest(integration.ModuleCase,
 
         # Then, test the result of the state run when changes are not expected to happen
         test_data = state_run['cmd_|-test_non_changing_state_|-echo "Should not run"_|-run']['comment']
-        expected_result = 'State was not run because onchanges req did not change'
+        expected_result = 'State was not run because none of the onchanges reqs changed'
+        self.assertIn(expected_result, test_data)
+
+    def test_onchanges_requisite_multiple(self):
+        '''
+        Tests a simple state using the onchanges requisite
+        '''
+
+        # Only run the state once and keep the return data
+        state_run = self.run_function('state.sls',
+                mods='requisites.onchanges_multiple')
+
+        # First, test the result of the state run when two changes are expected to happen
+        test_data = state_run['cmd_|-test_two_changing_states_|-echo "Success!"_|-run']['comment']
+        expected_result = 'Command "echo "Success!"" run'
+        self.assertIn(expected_result, test_data)
+
+        # Then, test the result of the state run when two changes are not expected to happen
+        test_data = state_run['cmd_|-test_two_non_changing_states_|-echo "Should not run"_|-run']['comment']
+        expected_result = 'State was not run because none of the onchanges reqs changed'
+        self.assertIn(expected_result, test_data)
+
+        # Finally, test the result of the state run when only one of the onchanges requisites changes.
+        test_data = state_run['cmd_|-test_one_changing_state_|-echo "Success!"_|-run']['comment']
+        expected_result = 'Command "echo "Success!"" run'
         self.assertIn(expected_result, test_data)
 
     def test_onchanges_in_requisite(self):
@@ -944,7 +1007,7 @@ class StateModuleTest(integration.ModuleCase,
 
         # Then, test the result of the state run when changes are not expected to happen
         test_data = state_run['cmd_|-test_changes_not_expected_|-echo "Should not run"_|-run']['comment']
-        expected_result = 'State was not run because onchanges req did not change'
+        expected_result = 'State was not run because none of the onchanges reqs changed'
         self.assertIn(expected_result, test_data)
 
     # onfail tests
@@ -966,6 +1029,21 @@ class StateModuleTest(integration.ModuleCase,
         test_data = state_run['cmd_|-test_non_failing_state_|-echo "Should not run"_|-run']['comment']
         expected_result = 'State was not run because onfail req did not change'
         self.assertIn(expected_result, test_data)
+
+    def test_multiple_onfail_requisite(self):
+        '''
+        test to ensure state is run even if only one
+        of the onfails fails. This is a test for the issue:
+        https://github.com/saltstack/salt/issues/22370
+        '''
+
+        state_run = self.run_function('state.sls', mods='requisites.onfail_multiple')
+
+        retcode = state_run['cmd_|-c_|-echo itworked_|-run']['changes']['retcode']
+        self.assertEqual(retcode, 0)
+
+        stdout = state_run['cmd_|-c_|-echo itworked_|-run']['changes']['stdout']
+        self.assertEqual(stdout, 'itworked')
 
     def test_onfail_in_requisite(self):
         '''
@@ -1019,6 +1097,48 @@ class StateModuleTest(integration.ModuleCase,
         absent_state = 'cmd_|-listener_test_listening_non_changing_state_|-echo "Only run once"_|-mod_watch'
         self.assertNotIn(absent_state, state_run)
 
+    def test_listen_in_requisite_resolution(self):
+        '''
+        Verify listen_in requisite lookups use ID declaration to check for changes
+        '''
+
+        # Only run the state once and keep the return data
+        state_run = self.run_function('state.sls', mods='requisites.listen_in_simple')
+
+        # Test the result of the state run when a listener is expected to trigger
+        listener_state = 'cmd_|-listener_test_listen_in_resolution_|-echo "Successful listen_in resolution"_|-mod_watch'
+        self.assertIn(listener_state, state_run)
+
+    def test_listen_requisite_resolution(self):
+        '''
+        Verify listen requisite lookups use ID declaration to check for changes
+        '''
+
+        # Only run the state once and keep the return data
+        state_run = self.run_function('state.sls', mods='requisites.listen_simple')
+
+        # Both listeners are expected to trigger
+        listener_state = 'cmd_|-listener_test_listening_resolution_one_|-echo "Successful listen resolution"_|-mod_watch'
+        self.assertIn(listener_state, state_run)
+
+        listener_state = 'cmd_|-listener_test_listening_resolution_two_|-echo "Successful listen resolution"_|-mod_watch'
+        self.assertIn(listener_state, state_run)
+
+    def test_issue_30820_requisite_in_match_by_name(self):
+        '''
+        This tests the case where a requisite_in matches by name instead of ID
+
+        See https://github.com/saltstack/salt/issues/30820 for more info
+        '''
+        state_run = self.run_function(
+            'state.sls',
+            mods='requisites.requisite_in_match_by_name'
+        )
+        bar_state = 'cmd_|-bar state_|-echo bar_|-wait'
+
+        self.assertIn(bar_state, state_run)
+        self.assertEqual(state_run[bar_state]['comment'],
+                         'Command "echo bar" run')
 
 if __name__ == '__main__':
     from integration import run_tests

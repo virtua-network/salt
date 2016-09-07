@@ -39,7 +39,7 @@ import shutil
 from datetime import datetime
 from salt.exceptions import FileserverConfigError
 
-PER_REMOTE_PARAMS = ('mountpoint', 'root', 'trunk', 'branches', 'tags')
+PER_REMOTE_OVERRIDES = ('mountpoint', 'root', 'trunk', 'branches', 'tags')
 
 # Import third party libs
 import salt.ext.six as six
@@ -55,6 +55,7 @@ except ImportError:
 
 # Import salt libs
 import salt.utils
+import salt.utils.url
 import salt.fileserver
 from salt.utils.event import tagify
 
@@ -78,8 +79,8 @@ def __virtual__():
     for param in ('svnfs_trunk', 'svnfs_branches', 'svnfs_tags'):
         if os.path.isabs(__opts__[param]):
             errors.append(
-                'Master configuration parameter {0!r} (value: {1}) cannot be '
-                'an absolute path'.format(param, __opts__[param])
+                'Master configuration parameter \'{0}\' (value: {1}) cannot '
+                'be an absolute path'.format(param, __opts__[param])
             )
     if errors:
         for error in errors:
@@ -125,7 +126,7 @@ def init():
     repos = []
 
     per_remote_defaults = {}
-    for param in PER_REMOTE_PARAMS:
+    for param in PER_REMOTE_OVERRIDES:
         per_remote_defaults[param] = \
             six.text_type(__opts__['svnfs_{0}'.format(param)])
 
@@ -148,12 +149,12 @@ def init():
 
             per_remote_errors = False
             for param in (x for x in per_remote_conf
-                          if x not in PER_REMOTE_PARAMS):
+                          if x not in PER_REMOTE_OVERRIDES):
                 log.error(
-                    'Invalid configuration parameter {0!r} for remote {1}. '
+                    'Invalid configuration parameter \'{0}\' for remote {1}. '
                     'Valid parameters are: {2}. See the documentation for '
                     'further information.'.format(
-                        param, repo_url, ', '.join(PER_REMOTE_PARAMS)
+                        param, repo_url, ', '.join(PER_REMOTE_OVERRIDES)
                     )
                 )
                 per_remote_errors = True
@@ -172,7 +173,7 @@ def init():
             _failhard()
 
         try:
-            repo_conf['mountpoint'] = salt.utils.strip_proto(
+            repo_conf['mountpoint'] = salt.utils.url.strip_proto(
                 repo_conf['mountpoint']
             )
         except TypeError:
@@ -193,7 +194,7 @@ def init():
                 new_remote = True
             except pysvn._pysvn.ClientError as exc:
                 log.error(
-                    'Failed to initialize svnfs remote {0!r}: {1}'
+                    'Failed to initialize svnfs remote \'{0}\': {1}'
                     .format(repo_url, exc)
                 )
                 _failhard()
@@ -504,7 +505,7 @@ def envs(ignore_cache=False):
             ret.add('base')
         else:
             log.error(
-                'svnfs trunk path {0!r} does not exist in repo {1}, no base '
+                'svnfs trunk path \'{0}\' does not exist in repo {1}, no base '
                 'environment will be provided by this remote'
                 .format(repo['trunk'], repo['url'])
             )
@@ -514,7 +515,7 @@ def envs(ignore_cache=False):
             ret.update(os.listdir(branches))
         else:
             log.error(
-                'svnfs branches path {0!r} does not exist in repo {1}'
+                'svnfs branches path \'{0}\' does not exist in repo {1}'
                 .format(repo['branches'], repo['url'])
             )
 
@@ -523,7 +524,7 @@ def envs(ignore_cache=False):
             ret.update(os.listdir(tags))
         else:
             log.error(
-                'svnfs tags path {0!r} does not exist in repo {1}'
+                'svnfs tags path \'{0}\' does not exist in repo {1}'
                 .format(repo['tags'], repo['url'])
             )
     return [x for x in sorted(ret) if _env_is_exposed(x)]
@@ -582,6 +583,22 @@ def find_file(path, tgt_env='base', **kwargs):  # pylint: disable=W0613
         if os.path.isfile(full):
             fnd['rel'] = path
             fnd['path'] = full
+            try:
+                # Converting the stat result to a list, the elements of the
+                # list correspond to the following stat_result params:
+                # 0 => st_mode=33188
+                # 1 => st_ino=10227377
+                # 2 => st_dev=65026
+                # 3 => st_nlink=1
+                # 4 => st_uid=1000
+                # 5 => st_gid=1000
+                # 6 => st_size=1056233
+                # 7 => st_atime=1468284229
+                # 8 => st_mtime=1456338235
+                # 9 => st_ctime=1456338235
+                fnd['stat'] = list(os.stat(full))
+            except Exception:
+                pass
             return fnd
     return fnd
 
@@ -592,11 +609,12 @@ def serve_file(load, fnd):
     '''
     if 'env' in load:
         salt.utils.warn_until(
-            'Boron',
-            'Passing a salt environment should be done using \'saltenv\' '
-            'not \'env\'. This functionality will be removed in Salt Boron.'
-        )
-        load['saltenv'] = load.pop('env')
+            'Oxygen',
+            'Parameter \'env\' has been detected in the argument list.  This '
+            'parameter is no longer used and has been replaced by \'saltenv\' '
+            'as of Salt Carbon.  This warning will be removed in Salt Oxygen.'
+            )
+        load.pop('env')
 
     ret = {'data': '',
            'dest': ''}
@@ -622,11 +640,12 @@ def file_hash(load, fnd):
     '''
     if 'env' in load:
         salt.utils.warn_until(
-            'Boron',
-            'Passing a salt environment should be done using \'saltenv\' '
-            'not \'env\'. This functionality will be removed in Salt Boron.'
-        )
-        load['saltenv'] = load.pop('env')
+            'Oxygen',
+            'Parameter \'env\' has been detected in the argument list.  This '
+            'parameter is no longer used and has been replaced by \'saltenv\' '
+            'as of Salt Carbon.  This warning will be removed in Salt Oxygen.'
+            )
+        load.pop('env')
 
     if not all(x in load for x in ('path', 'saltenv')):
         return ''
@@ -679,11 +698,12 @@ def _file_lists(load, form):
     '''
     if 'env' in load:
         salt.utils.warn_until(
-            'Boron',
-            'Passing a salt environment should be done using \'saltenv\' '
-            'not \'env\'. This functionality will be removed in Salt Boron.'
-        )
-        load['saltenv'] = load.pop('env')
+            'Oxygen',
+            'Parameter \'env\' has been detected in the argument list.  This '
+            'parameter is no longer used and has been replaced by \'saltenv\' '
+            'as of Salt Carbon.  This warning will be removed in Salt Oxygen.'
+            )
+        load.pop('env')
 
     if 'saltenv' not in load or load['saltenv'] not in envs():
         return []

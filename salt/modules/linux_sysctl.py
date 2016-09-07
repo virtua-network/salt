@@ -10,6 +10,7 @@ import os
 import re
 
 # Import salt libs
+import salt.ext.six as six
 import salt.utils
 from salt.ext.six import string_types
 from salt.exceptions import CommandExecutionError
@@ -30,7 +31,7 @@ def __virtual__():
     Only run on Linux systems
     '''
     if __grains__['kernel'] != 'Linux':
-        return False
+        return (False, 'The linux_sysctl execution module cannot be loaded: only available on Linux systems.')
     return __virtualname__
 
 
@@ -40,7 +41,12 @@ def _check_systemd_salt_config():
         sysctl_dir = os.path.split(conf)[0]
         if not os.path.exists(sysctl_dir):
             os.makedirs(sysctl_dir)
-        salt.utils.fopen(conf, 'w').close()
+        try:
+            with salt.utils.fopen(conf, 'w'):
+                pass
+        except (IOError, OSError):
+            msg = 'Could not create file: {0}'
+            raise CommandExecutionError(msg.format(conf))
     return conf
 
 
@@ -79,16 +85,17 @@ def show(config_file=False):
     ret = {}
     if config_file:
         try:
-            for line in salt.utils.fopen(config_file):
-                if not line.startswith('#') and '=' in line:
-                    # search if we have some '=' instead of ' = ' separators
-                    SPLIT = ' = '
-                    if SPLIT not in line:
-                        SPLIT = SPLIT.strip()
-                    key, value = line.split(SPLIT, 1)
-                    key = key.strip()
-                    value = value.lstrip()
-                    ret[key] = value
+            with salt.utils.fopen(config_file) as fp_:
+                for line in fp_:
+                    if not line.startswith('#') and '=' in line:
+                        # search if we have some '=' instead of ' = ' separators
+                        SPLIT = ' = '
+                        if SPLIT not in line:
+                            SPLIT = SPLIT.strip()
+                        key, value = line.split(SPLIT, 1)
+                        key = key.strip()
+                        value = value.lstrip()
+                        ret[key] = value
         except (OSError, IOError):
             log.error('Could not open sysctl file')
             return None
@@ -129,7 +136,8 @@ def assign(name, value):
         salt '*' sysctl.assign net.ipv4.ip_forward 1
     '''
     value = str(value)
-    sysctl_file = '/proc/sys/{0}'.format(name.translate(string.maketrans('./', '/.')))
+    trantab = ''.maketrans('./', '/.') if six.PY3 else string.maketrans('./', '/.')
+    sysctl_file = '/proc/sys/{0}'.format(name.translate(trantab))
     if not os.path.exists(sysctl_file):
         raise CommandExecutionError('sysctl {0} does not exist'.format(name))
 

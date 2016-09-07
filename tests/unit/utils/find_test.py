@@ -306,9 +306,8 @@ class TestGrepOption(TestCase):
 
     def test_grep_option_match_regular_file(self):
         hello_file = os.path.join(self.tmpdir, 'hello.txt')
-        fd = salt.utils.fopen(hello_file, 'w')
-        fd.write("foo")
-        fd.close()
+        with salt.utils.fopen(hello_file, 'w') as fp_:
+            fp_.write('foo')
         option = salt.utils.find.GrepOption('grep', 'foo')
         self.assertEqual(
             option.match(self.tmpdir, 'hello.txt', os.stat(hello_file)),
@@ -366,9 +365,8 @@ class TestPrintOption(TestCase):
 
     def test_print_option_execute(self):
         hello_file = os.path.join(self.tmpdir, 'hello.txt')
-        fd = salt.utils.fopen(hello_file, 'w')
-        fd.write("foo")
-        fd.close()
+        with salt.utils.fopen(hello_file, 'w') as fp_:
+            fp_.write('foo')
 
         option = salt.utils.find.PrintOption('print', '')
         self.assertEqual(option.execute('', [0] * 9), '')
@@ -556,19 +554,23 @@ class TestFinder(TestCase):
 
     def test_find(self):
         hello_file = os.path.join(self.tmpdir, 'hello.txt')
-        fd = salt.utils.fopen(hello_file, 'w')
-        fd.write("foo")
-        fd.close()
+        with salt.utils.fopen(hello_file, 'w') as fp_:
+            fp_.write('foo')
 
-        finder = salt.utils.find.Finder({'name': 'test_name'})
-        self.assertEqual(list(finder.find('')), [])
+        finder = salt.utils.find.Finder({})
+        self.assertEqual(list(finder.find(self.tmpdir)), [self.tmpdir, hello_file])
+
+        finder = salt.utils.find.Finder({'mindepth': 1})
+        self.assertEqual(list(finder.find(self.tmpdir)), [hello_file])
+
+        finder = salt.utils.find.Finder({'maxdepth': 0})
+        self.assertEqual(list(finder.find(self.tmpdir)), [self.tmpdir])
 
         finder = salt.utils.find.Finder({'name': 'hello.txt'})
         self.assertEqual(list(finder.find(self.tmpdir)), [hello_file])
 
         finder = salt.utils.find.Finder({'type': 'f', 'print': 'path'})
-        self.assertEqual(list(finder.find(self.tmpdir)),
-            [os.path.join(self.tmpdir, 'hello.txt')])
+        self.assertEqual(list(finder.find(self.tmpdir)), [hello_file])
 
         finder = salt.utils.find.Finder({'size': '+1G', 'print': 'path'})
         self.assertEqual(list(finder.find(self.tmpdir)), [])
@@ -579,6 +581,9 @@ class TestFinder(TestCase):
         self.assertEqual(
             list(finder.find(self.tmpdir)), [[hello_file, 'hello.txt']]
         )
+
+        finder = salt.utils.find.Finder({'name': 'test_name'})
+        self.assertEqual(list(finder.find('')), [])
 
 
 if __name__ == '__main__':

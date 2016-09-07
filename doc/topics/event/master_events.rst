@@ -19,6 +19,15 @@ Authentication events
         ``reject``.
     :var pub: The minion public key.
 
+
+    .. note:: Minions fire auth events on fairly regular basis for a number
+              of reasons.  Writing reactors to respond to events through
+              the auth cycle can lead to infinite reactor event loops
+              (minion tries to auth, reactor responds by doing something
+              that generates another auth event, minion sends auth event,
+              etc.).  Consider reacting to ``salt/key`` or ``salt/minion/<MID>/start``
+              or firing a custom event tag instead.
+
 Start events
 ============
 
@@ -37,7 +46,14 @@ Key events
 
     :var id: The minion ID.
     :var act: The new status of the minion key: ``accept``, ``pend``,
-        ``reject``.
+              ``reject``, ``delete``.
+
+.. warning:: If a master is in :conf_master:`auto_accept mode`, ``salt/key`` events
+             will not be fired when the keys are accepted.  In addition, pre-seeding
+             keys (like happens through :ref:`Salt-Cloud<salt-cloud>`) will not cause
+             firing of these events.
+
+
 
 Job events
 ==========
@@ -58,7 +74,7 @@ Job events
     :var minions: A list of minion IDs that Salt expects will return data for
         this job.
     :var user: The name of the user that ran the command as defined in Salt's
-        Client ACL or external auth.
+        Publisher ACL or external auth.
 
 .. salt:event:: salt/job/<JID>/ret/<MID>
 
@@ -70,9 +86,59 @@ Job events
     :var fun: The function the minion ran. E.g., ``test.ping``.
     :var return: The data returned from the execution module.
 
+.. salt:event:: salt/job/<JID>/prog/<MID>/<RUN NUM>
+
+    Fired each time a each function in a state run completes execution. Must be
+    enabled using the :conf_master:`state_events` option.
+
+    :var data: The data returned from the state module function.
+    :var id: The minion ID.
+    :var jid: The job ID.
+
+Runner Events
+=============
+
+.. salt:event:: salt/run/<JID>/new
+
+    Fired as a runner begins execution
+
+    :var jid: The job ID.
+    :var fun: The name of the runner function, with ``runner.`` prepended to it
+        (e.g. ``runner.jobs.lookup_jid``)
+    :var fun_args: The arguments passed to the runner function (e.g.
+        ``['20160829225914848058']``)
+    :var user: The user who executed the runner (e.g. ``root``)
+
+.. salt:event:: salt/run/<JID>/ret
+
+    Fired when a runner function returns
+
+    :var jid: The job ID.
+    :var fun: The name of the runner function, with ``runner.`` prepended to it
+        (e.g. ``runner.jobs.lookup_jid``)
+    :var fun_args: The arguments passed to the runner function (e.g.
+        ``['20160829225914848058']``)
+    :var return: The data returned by the runner function
+
+.. salt:event:: salt/run/<JID>/args
+
+    .. versionadded:: Carbon
+
+    Fired by the :mod:`state.orchestrate <salt.runners.state.orchestrate>`
+    runner
+
+    :var name: The ID declaration for the orchestration job (i.e. the line
+        above ``salt.state``, ``salt.function``, ``salt.runner``, etc.)
+    :var type: The type of orchestration job being run (e.g. ``state``)
+    :var tgt: The target expression (e.g. ``*``). Included for ``state`` and
+        ``function`` types only.
+    :var args: The args passed to the orchestration job. **Note:** for
+        ``state`` and ``function`` types, also includes an ``expr_form`` which
+        shows what kind of match (``glob``, ``pcre``, etc.) was used.
+
 .. _event-master_presence:
 
-Presence events
+Presence Events
 ===============
 
 .. salt:event:: salt/presence/present

@@ -8,7 +8,6 @@ from __future__ import absolute_import
 import logging
 import os.path
 import os
-import StringIO
 
 # Import third party libs
 import jinja2
@@ -40,7 +39,7 @@ def __virtual__():
     '''
     if __grains__['os_family'] == 'RedHat':
         return __virtualname__
-    return False
+    return (False, 'The rh_ip execution module cannot be loaded: this module is only available on RHEL/Fedora based distributions.')
 
 
 # Setup networking attributes
@@ -50,8 +49,8 @@ _ETHTOOL_CONFIG_OPTS = [
     'gso', 'gro', 'lro'
 ]
 _RH_CONFIG_OPTS = [
-    'domain', 'peerdns', 'defroute',
-    'mtu', 'static-routes', 'gateway'
+    'domain', 'peerdns', 'peerntp', 'defroute',
+    'mtu', 'static-routes', 'gateway', 'zone'
 ]
 _RH_CONFIG_BONDING_OPTS = [
     'mode', 'miimon', 'arp_interval',
@@ -206,7 +205,7 @@ def _parse_settings_bond(opts, iface):
         # Used with miimon.
         # On: driver sends mii
         # Off: ethtool sends mii
-        'use_carrier': 'on',
+        'use_carrier': '0',
         # Default. Don't change unless you know what you are doing.
         'xmit_hash_policy': 'layer2',
     }
@@ -276,9 +275,12 @@ def _parse_settings_bond_0(opts, iface, bond_def):
     if 'arp_ip_target' in opts:
         if isinstance(opts['arp_ip_target'], list):
             if 1 <= len(opts['arp_ip_target']) <= 16:
-                bond.update({'arp_ip_target': []})
+                bond.update({'arp_ip_target': ''})
                 for ip in opts['arp_ip_target']:  # pylint: disable=C0103
-                    bond['arp_ip_target'].append(ip)
+                    if len(bond['arp_ip_target']) > 0:
+                        bond['arp_ip_target'] = bond['arp_ip_target'] + ',' + ip
+                    else:
+                        bond['arp_ip_target'] = ip
             else:
                 _raise_error_iface(iface, 'arp_ip_target', valid)
         else:
@@ -322,9 +324,9 @@ def _parse_settings_bond_1(opts, iface, bond_def):
 
     if 'use_carrier' in opts:
         if opts['use_carrier'] in _CONFIG_TRUE:
-            bond.update({'use_carrier': 'on'})
+            bond.update({'use_carrier': '1'})
         elif opts['use_carrier'] in _CONFIG_FALSE:
-            bond.update({'use_carrier': 'off'})
+            bond.update({'use_carrier': '0'})
         else:
             valid = _CONFIG_TRUE + _CONFIG_FALSE
             _raise_error_iface(iface, 'use_carrier', valid)
@@ -349,9 +351,12 @@ def _parse_settings_bond_2(opts, iface, bond_def):
     if 'arp_ip_target' in opts:
         if isinstance(opts['arp_ip_target'], list):
             if 1 <= len(opts['arp_ip_target']) <= 16:
-                bond.update({'arp_ip_target': []})
+                bond.update({'arp_ip_target': ''})
                 for ip in opts['arp_ip_target']:  # pylint: disable=C0103
-                    bond['arp_ip_target'].append(ip)
+                    if len(bond['arp_ip_target']) > 0:
+                        bond['arp_ip_target'] = bond['arp_ip_target'] + ',' + ip
+                    else:
+                        bond['arp_ip_target'] = ip
             else:
                 _raise_error_iface(iface, 'arp_ip_target', valid)
         else:
@@ -405,9 +410,9 @@ def _parse_settings_bond_3(opts, iface, bond_def):
 
     if 'use_carrier' in opts:
         if opts['use_carrier'] in _CONFIG_TRUE:
-            bond.update({'use_carrier': 'on'})
+            bond.update({'use_carrier': '1'})
         elif opts['use_carrier'] in _CONFIG_FALSE:
-            bond.update({'use_carrier': 'off'})
+            bond.update({'use_carrier': '0'})
         else:
             valid = _CONFIG_TRUE + _CONFIG_FALSE
             _raise_error_iface(iface, 'use_carrier', valid)
@@ -449,9 +454,9 @@ def _parse_settings_bond_4(opts, iface, bond_def):
 
     if 'use_carrier' in opts:
         if opts['use_carrier'] in _CONFIG_TRUE:
-            bond.update({'use_carrier': 'on'})
+            bond.update({'use_carrier': '1'})
         elif opts['use_carrier'] in _CONFIG_FALSE:
-            bond.update({'use_carrier': 'off'})
+            bond.update({'use_carrier': '0'})
         else:
             valid = _CONFIG_TRUE + _CONFIG_FALSE
             _raise_error_iface(iface, 'use_carrier', valid)
@@ -492,9 +497,9 @@ def _parse_settings_bond_5(opts, iface, bond_def):
 
     if 'use_carrier' in opts:
         if opts['use_carrier'] in _CONFIG_TRUE:
-            bond.update({'use_carrier': 'on'})
+            bond.update({'use_carrier': '1'})
         elif opts['use_carrier'] in _CONFIG_FALSE:
-            bond.update({'use_carrier': 'off'})
+            bond.update({'use_carrier': '0'})
         else:
             valid = _CONFIG_TRUE + _CONFIG_FALSE
             _raise_error_iface(iface, 'use_carrier', valid)
@@ -528,9 +533,9 @@ def _parse_settings_bond_6(opts, iface, bond_def):
 
     if 'use_carrier' in opts:
         if opts['use_carrier'] in _CONFIG_TRUE:
-            bond.update({'use_carrier': 'on'})
+            bond.update({'use_carrier': '1'})
         elif opts['use_carrier'] in _CONFIG_FALSE:
-            bond.update({'use_carrier': 'off'})
+            bond.update({'use_carrier': '0'})
         else:
             valid = _CONFIG_TRUE + _CONFIG_FALSE
             _raise_error_iface(iface, 'use_carrier', valid)
@@ -539,6 +544,34 @@ def _parse_settings_bond_6(opts, iface, bond_def):
         bond.update({'use_carrier': bond_def['use_carrier']})
 
     return bond
+
+
+def _parse_settings_vlan(opts, iface):
+
+    '''
+    Filters given options and outputs valid settings for a vlan
+    '''
+    vlan = {}
+    if 'reorder_hdr' in opts:
+        if opts['reorder_hdr'] in _CONFIG_TRUE + _CONFIG_FALSE:
+            vlan.update({'reorder_hdr': opts['reorder_hdr']})
+        else:
+            valid = _CONFIG_TRUE + _CONFIG_FALSE
+            _raise_error_iface(iface, 'reorder_hdr', valid)
+
+    if 'vlan_id' in opts:
+        if opts['vlan_id'] > 0:
+            vlan.update({'vlan_id': opts['vlan_id']})
+        else:
+            _raise_error_iface(iface, 'vlan_id', 'Positive integer')
+
+    if 'phys_dev' in opts:
+        if len(opts['phys_dev']) > 0:
+            vlan.update({'phys_dev': opts['phys_dev']})
+        else:
+            _raise_error_iface(iface, 'phys_dev', 'Non-empty string')
+
+    return vlan
 
 
 def _parse_settings_eth(opts, iface_type, enabled, iface):
@@ -561,7 +594,7 @@ def _parse_settings_eth(opts, iface_type, enabled, iface):
     if 'mtu' in opts:
         try:
             result['mtu'] = int(opts['mtu'])
-        except Exception:
+        except ValueError:
             _raise_error_iface(iface, 'mtu', ['integer'])
 
     if iface_type not in ['bridge']:
@@ -576,6 +609,14 @@ def _parse_settings_eth(opts, iface_type, enabled, iface):
         bonding = _parse_settings_bond(opts, iface)
         if bonding:
             result['bonding'] = bonding
+            result['devtype'] = "Bond"
+
+    if iface_type == 'vlan':
+        vlan = _parse_settings_vlan(opts, iface)
+        if vlan:
+            result['devtype'] = "Vlan"
+            for opt in vlan:
+                result[opt] = opts[opt]
 
     if iface_type not in ['bond', 'vlan', 'bridge', 'ipip']:
         if 'addr' in opts:
@@ -589,7 +630,8 @@ def _parse_settings_eth(opts, iface_type, enabled, iface):
                 ifaces = __salt__['network.interfaces']()
                 if iface in ifaces and 'hwaddr' in ifaces[iface]:
                     result['addr'] = ifaces[iface]['hwaddr']
-
+    if iface_type == 'eth':
+        result['devtype'] = 'Ethernet'
     if iface_type == 'bridge':
         result['devtype'] = 'Bridge'
         bypassfirewall = True
@@ -624,7 +666,16 @@ def _parse_settings_eth(opts, iface_type, enabled, iface):
     if iface_type == 'ib':
         result['devtype'] = 'InfiniBand'
 
-    for opt in ['ipaddr', 'master', 'netmask', 'srcaddr', 'delay', 'domain', 'gateway']:
+    if 'prefix' in opts:
+        if 'netmask' in opts:
+            msg = 'Cannot use prefix and netmask together'
+            log.error(msg)
+            raise AttributeError(msg)
+        result['prefix'] = opts['prefix']
+    elif 'netmask' in opts:
+        result['netmask'] = opts['netmask']
+
+    for opt in ['ipaddr', 'master', 'srcaddr', 'delay', 'domain', 'gateway', 'uuid', 'nickname', 'zone']:
         if opt in opts:
             result[opt] = opts[opt]
 
@@ -632,21 +683,16 @@ def _parse_settings_eth(opts, iface_type, enabled, iface):
         if opt in opts:
             result[opt] = opts[opt]
 
-    if 'mtu' in opts:
-        try:
-            int(opts['mtu'])
-            result['mtu'] = opts['mtu']
-        except Exception:
-            _raise_error_iface(iface, 'mtu', ['integer'])
-
-    if 'ipv6_autoconf' in opts:
-        result['ipv6_autoconf'] = opts['ipv6_autoconf']
+    for opt in ['ipaddrs', 'ipv6addrs']:
+        if opt in opts:
+            result[opt] = opts[opt]
 
     if 'enable_ipv6' in opts:
         result['enable_ipv6'] = opts['enable_ipv6']
 
     valid = _CONFIG_TRUE + _CONFIG_FALSE
-    for opt in ['onparent', 'peerdns', 'slave', 'vlan', 'defroute', 'stp']:
+    for opt in ['onparent', 'peerdns', 'peerroutes', 'slave', 'vlan', 'defroute', 'stp', 'ipv6_peerdns',
+                'ipv6_defroute', 'ipv6_peerroutes', 'ipv6_autoconf', 'ipv4_failure_fatal', 'dhcpv6c']:
         if opt in opts:
             if opts[opt] in _CONFIG_TRUE:
                 result[opt] = 'yes'
@@ -730,7 +776,10 @@ def _parse_network_settings(opts, current):
     # Normalize keys
     opts = dict((k.lower(), v) for (k, v) in six.iteritems(opts))
     current = dict((k.lower(), v) for (k, v) in six.iteritems(current))
-    result = {}
+
+    # Check for supported parameters
+    retain_settings = opts.get('retain_settings', False)
+    result = current if retain_settings else {}
 
     valid = _CONFIG_TRUE + _CONFIG_FALSE
     if 'enabled' not in opts:
@@ -811,9 +860,14 @@ def _read_file(path):
     try:
         with salt.utils.fopen(path, 'rb') as contents:
             # without newlines character. http://stackoverflow.com/questions/12330522/reading-a-file-without-newlines
-            return contents.read().splitlines()
+            lines = contents.read().splitlines()
+            try:
+                lines.remove('')
+            except ValueError:
+                pass
+            return lines
     except Exception:
-        return ''
+        return []  # Return empty list for type consistency
 
 
 def _write_file_iface(iface, data, folder, pattern):
@@ -826,27 +880,25 @@ def _write_file_iface(iface, data, folder, pattern):
         msg = msg.format(filename, folder)
         log.error(msg)
         raise AttributeError(msg)
-    fout = salt.utils.fopen(filename, 'w')
-    fout.write(data)
-    fout.close()
+    with salt.utils.fopen(filename, 'w') as fp_:
+        fp_.write(data)
 
 
 def _write_file_network(data, filename):
     '''
     Writes a file to disk
     '''
-    fout = salt.utils.fopen(filename, 'w')
-    fout.write(data)
-    fout.close()
+    with salt.utils.fopen(filename, 'w') as fp_:
+        fp_.write(data)
 
 
 def _read_temp(data):
-    tout = StringIO.StringIO()
-    tout.write(data)
-    tout.seek(0)
-    output = tout.read().splitlines()  # Discard newlines
-    tout.close()
-    return output
+    lines = data.splitlines()
+    try:  # Discard newlines if they exist
+        lines.remove('')
+    except ValueError:
+        pass
+    return lines
 
 
 def build_bond(iface, **settings):
@@ -956,24 +1008,52 @@ def build_routes(iface, **settings):
         salt '*' ip.build_routes eth0 <settings>
     '''
 
+    template = 'rh6_route_eth.jinja'
+    try:
+        if int(__grains__['osrelease'][0]) < 6:
+            template = 'route_eth.jinja'
+    except ValueError:
+        pass
+    log.debug('Template name: ' + template)
+
     iface = iface.lower()
     opts = _parse_routes(iface, settings)
+    log.debug("Opts: \n {0}".format(opts))
     try:
-        template = JINJA.get_template('route_eth.jinja')
+        template = JINJA.get_template(template)
     except jinja2.exceptions.TemplateNotFound:
         log.error(
-            'Could not load template route_eth.jinja'
+            'Could not load template {0}'.format(template)
         )
         return ''
-    routecfg = template.render(routes=opts['routes'])
+    opts6 = []
+    opts4 = []
+    for route in opts['routes']:
+        ipaddr = route['ipaddr']
+        if salt.utils.validate.net.ipv6_addr(ipaddr):
+            opts6.append(route)
+        else:
+            opts4.append(route)
+    log.debug("IPv4 routes:\n{0}".format(opts4))
+    log.debug("IPv6 routes:\n{0}".format(opts6))
+
+    routecfg = template.render(routes=opts4)
+    routecfg6 = template.render(routes=opts6)
 
     if settings['test']:
-        return _read_temp(routecfg)
+        routes = _read_temp(routecfg)
+        routes.extend(_read_temp(routecfg6))
+        return routes
 
     _write_file_iface(iface, routecfg, _RH_NETWORK_SCRIPT_DIR, 'route-{0}')
-    path = os.path.join(_RH_NETWORK_SCRIPT_DIR, 'route-{0}'.format(iface))
+    _write_file_iface(iface, routecfg6, _RH_NETWORK_SCRIPT_DIR, 'route6-{0}')
 
-    return _read_file(path)
+    path = os.path.join(_RH_NETWORK_SCRIPT_DIR, 'route-{0}'.format(iface))
+    path6 = os.path.join(_RH_NETWORK_SCRIPT_DIR, 'route6-{0}'.format(iface))
+
+    routes = _read_file(path)
+    routes.extend(_read_file(path6))
+    return routes
 
 
 def down(iface, iface_type):
@@ -1047,7 +1127,10 @@ def get_routes(iface):
         salt '*' ip.get_routes eth0
     '''
     path = os.path.join(_RH_NETWORK_SCRIPT_DIR, 'route-{0}'.format(iface))
-    return _read_file(path)
+    path6 = os.path.join(_RH_NETWORK_SCRIPT_DIR, 'route6-{0}'.format(iface))
+    routes = _read_file(path)
+    routes.extend(_read_file(path6))
+    return routes
 
 
 def get_network_settings():

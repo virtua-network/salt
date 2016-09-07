@@ -3,9 +3,12 @@
 Module for making various web calls. Primarily designed for webhooks and the
 like, but also useful for basic http testing.
 
-.. versionadded:: 2015.2
+.. versionadded:: 2015.5.0
 '''
 from __future__ import absolute_import
+
+# Import system libs
+import time
 
 # Import salt libs
 import salt.utils.http
@@ -15,7 +18,7 @@ def query(url, **kwargs):
     '''
     Query a resource, and decode the return data
 
-    .. versionadded:: 2015.2
+    .. versionadded:: 2015.5.0
 
     CLI Example:
 
@@ -30,11 +33,42 @@ def query(url, **kwargs):
     return salt.utils.http.query(url=url, opts=__opts__, **kwargs)
 
 
+def wait_for_successful_query(url, wait_for=300, **kwargs):
+    '''
+    Query a resource until a successful response, and decode the return data
+
+    CLI Example:
+
+    .. code-block:: bash
+
+        salt '*' http.wait_for_successful_query http://somelink.com/ wait_for=160
+    '''
+
+    starttime = time.time()
+
+    while True:
+        caught_exception = None
+        result = None
+        try:
+            result = query(url=url, **kwargs)
+            if not result.get('Error') and not result.get('error'):
+                return result
+        except Exception as exc:
+            caught_exception = exc
+
+        if time.time() > starttime + wait_for:
+            if not result and caught_exception:
+                # workaround pylint bug https://www.logilab.org/ticket/3207
+                raise caught_exception  # pylint: disable=E0702
+
+            return result
+
+
 def update_ca_bundle(target=None, source=None, merge_files=None):
     '''
     Update the local CA bundle file from a URL
 
-    .. versionadded:: 2015.2
+    .. versionadded:: 2015.5.0
 
     CLI Example:
 

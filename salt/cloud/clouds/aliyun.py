@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 '''
 AliYun ECS Cloud Module
-==========================
+=======================
 
 .. versionadded:: 2014.7.0
 
@@ -20,13 +20,13 @@ Set up the cloud configuration at ``/etc/salt/cloud.providers`` or
       # aliyun Access Key Secret
       key: GDE43t43REGTrkilg43934t34qT43t4dgegerGEgg
       location: cn-qingdao
-      provider: aliyun
+      driver: aliyun
 
 :depends: requests
 '''
-from __future__ import absolute_import
 
 # Import python libs
+from __future__ import absolute_import
 import time
 import json
 import pprint
@@ -37,8 +37,7 @@ import sys
 import base64
 from hashlib import sha1
 
-# Import 3rd-party libs
-import requests
+# Import Salt libs
 from salt.ext.six.moves.urllib.parse import quote as _quote  # pylint: disable=import-error,no-name-in-module
 
 # Import salt cloud libs
@@ -50,6 +49,13 @@ from salt.exceptions import (
     SaltCloudExecutionFailure,
     SaltCloudExecutionTimeout
 )
+
+# Import Third Party Libs
+try:
+    import requests
+    HAS_REQUESTS = True
+except ImportError:
+    HAS_REQUESTS = False
 
 # Get logging started
 log = logging.getLogger(__name__)
@@ -65,6 +71,8 @@ DEFAULT_LOCATION = 'cn-hangzhou'
 
 DEFAULT_ALIYUN_API_VERSION = '2013-01-10'
 
+__virtualname__ = 'aliyun'
+
 
 # Only load in this module if the aliyun configurations are in place
 def __virtual__():
@@ -74,7 +82,10 @@ def __virtual__():
     if get_configured_provider() is False:
         return False
 
-    return True
+    if get_dependencies() is False:
+        return False
+
+    return __virtualname__
 
 
 def get_configured_provider():
@@ -83,8 +94,18 @@ def get_configured_provider():
     '''
     return config.is_provider_configured(
         __opts__,
-        __active_provider_name__ or 'aliyun',
+        __active_provider_name__ or __virtualname__,
         ('id', 'key')
+    )
+
+
+def get_dependencies():
+    '''
+    Warn if dependencies aren't met.
+    '''
+    return config.check_driver_dependencies(
+        __virtualname__,
+        {'requests': HAS_REQUESTS}
     )
 
 
@@ -292,7 +313,7 @@ def list_nodes_full(call=None):
         }
         items = query(params=params)
         if 'Code' in items:
-            log.warn('Query instance:{0} attribute failed'.format(instanceId))
+            log.warning('Query instance:{0} attribute failed'.format(instanceId))
             continue
 
         ret[instanceId] = {
@@ -318,7 +339,7 @@ def list_nodes_full(call=None):
         provider = comps[0]
 
     __opts__['update_cachedir'] = True
-    salt.utils.cloud.cache_node_list(ret, provider, __opts__)
+    __utils__['cloud.cache_node_list'](ret, provider, __opts__)
 
     return ret
 
@@ -374,7 +395,7 @@ def get_image(vm_):
     if vm_image and str(vm_image) in images:
         return images[vm_image]['ImageId']
     raise SaltCloudNotFound(
-        'The specified image, {0!r}, could not be found.'.format(vm_image)
+        'The specified image, \'{0}\', could not be found.'.format(vm_image)
     )
 
 
@@ -393,7 +414,7 @@ def get_securitygroup(vm_):
     if securitygroup and str(securitygroup) in sgs:
         return sgs[securitygroup]['SecurityGroupId']
     raise SaltCloudNotFound(
-        'The specified security group, {0!r}, could not be found.'.format(
+        'The specified security group, \'{0}\', could not be found.'.format(
             securitygroup)
     )
 
@@ -414,7 +435,7 @@ def get_size(vm_):
         return sizes[vm_size]['InstanceTypeId']
 
     raise SaltCloudNotFound(
-        'The specified size, {0!r}, could not be found.'.format(vm_size)
+        'The specified size, \'{0}\', could not be found.'.format(vm_size)
     )
 
 
@@ -433,7 +454,7 @@ def __get_location(vm_):
     if vm_location and str(vm_location) in locations:
         return locations[vm_location]['RegionId']
     raise SaltCloudNotFound(
-        'The specified location, {0!r}, could not be found.'.format(
+        'The specified location, \'{0}\', could not be found.'.format(
             vm_location
         )
     )
@@ -443,7 +464,9 @@ def start(name, call=None):
     '''
     Start a node
 
-    CLI Examples::
+    CLI Examples:
+
+    .. code-block:: bash
 
         salt-cloud -a start myinstance
     '''
@@ -467,7 +490,9 @@ def stop(name, force=False, call=None):
     '''
     Stop a node
 
-    CLI Examples::
+    CLI Examples:
+
+    .. code-block:: bash
 
         salt-cloud -a stop myinstance
         salt-cloud -a stop myinstance force=True
@@ -495,7 +520,9 @@ def reboot(name, call=None):
     '''
     Reboot a node
 
-    CLI Examples::
+    CLI Examples:
+
+    .. code-block:: bash
 
         salt-cloud -a reboot myinstance
     '''
@@ -552,15 +579,31 @@ def create(vm_):
     '''
     Create a single VM from a data dict
     '''
-    salt.utils.cloud.fire_event(
+    try:
+        # Check for required profile parameters before sending any API calls.
+        if vm_['profile'] and config.is_profile_configured(__opts__,
+                                                           __active_provider_name__ or 'aliyun',
+                                                           vm_['profile'],
+                                                           vm_=vm_) is False:
+            return False
+    except AttributeError:
+        pass
+
+    # Since using "provider: <provider-engine>" is deprecated, alias provider
+    # to use driver: "driver: <provider-engine>"
+    if 'provider' in vm_:
+        vm_['driver'] = vm_.pop('provider')
+
+    __utils__['cloud.fire_event'](
         'event',
         'starting create',
         'salt/cloud/{0}/creating'.format(vm_['name']),
-        {
+        args={
             'name': vm_['name'],
             'profile': vm_['profile'],
-            'provider': vm_['provider'],
+            'provider': vm_['driver'],
         },
+        sock_dir=__opts__['sock_dir'],
         transport=__opts__['transport']
     )
 
@@ -573,11 +616,12 @@ def create(vm_):
         'securitygroup_id': get_securitygroup(vm_),
     }
 
-    salt.utils.cloud.fire_event(
+    __utils__['cloud.fire_event'](
         'event',
         'requesting instance',
         'salt/cloud/{0}/requesting'.format(vm_['name']),
-        {'kwargs': kwargs},
+        args={'kwargs': kwargs},
+        sock_dir=__opts__['sock_dir'],
         transport=__opts__['transport']
     )
 
@@ -627,25 +671,26 @@ def create(vm_):
     vm_['ssh_host'] = public_ip
 
     # The instance is booted and accessible, let's Salt it!
-    ret = salt.utils.cloud.bootstrap(vm_, __opts__)
+    ret = __utils__['cloud.bootstrap'](vm_, __opts__)
     ret.update(data.__dict__)
 
-    log.info('Created Cloud VM {0[name]!r}'.format(vm_))
+    log.info('Created Cloud VM \'{0[name]}\''.format(vm_))
     log.debug(
-        '{0[name]!r} VM creation details:\n{1}'.format(
+        '\'{0[name]}\' VM creation details:\n{1}'.format(
             vm_, pprint.pformat(data)
         )
     )
 
-    salt.utils.cloud.fire_event(
+    __utils__['cloud.fire_event'](
         'event',
         'created instance',
         'salt/cloud/{0}/created'.format(vm_['name']),
-        {
+        args={
             'name': vm_['name'],
             'profile': vm_['profile'],
-            'provider': vm_['provider'],
+            'provider': vm_['driver'],
         },
+        sock_dir=__opts__['sock_dir'],
         transport=__opts__['transport']
     )
 
@@ -675,7 +720,7 @@ def _compute_signature(parameters, access_key_secret):
     sortedParameters = sorted(list(parameters.items()), key=lambda items: items[0])
 
     canonicalizedQueryString = ''
-    for (k, v) in sortedParameters:
+    for k, v in sortedParameters:
         canonicalizedQueryString += '&' + percent_encode(k) \
             + '=' + percent_encode(v)
 
@@ -721,11 +766,11 @@ def query(params=None):
     signature = _compute_signature(parameters, access_key_secret)
     parameters['Signature'] = signature
 
-    request = requests.get(path, params=parameters, verify=False)
+    request = requests.get(path, params=parameters, verify=True)
     if request.status_code != 200:
         raise SaltCloudSystemExit(
             'An error occurred while querying aliyun ECS. HTTP Code: {0}  '
-            'Error: {1!r}'.format(
+            'Error: \'{1}\''.format(
                 request.status_code,
                 request.text
             )
@@ -734,7 +779,6 @@ def query(params=None):
     log.debug(request.url)
 
     content = request.text
-    #print content
 
     result = json.loads(content, object_hook=salt.utils.decode_dict)
     if 'Code' in result:
@@ -764,7 +808,9 @@ def show_disk(name, call=None):
     '''
     Show the disk details of the instance
 
-    CLI Examples::
+    CLI Examples:
+
+    .. code-block:: bash
 
         salt-cloud -a show_disk aliyun myinstance
     '''
@@ -793,7 +839,9 @@ def list_monitor_data(kwargs=None, call=None):
     Get monitor data of the instance. If instance name is
     missing, will show all the instance monitor data on the region.
 
-    CLI Examples::
+    CLI Examples:
+
+    .. code-block:: bash
 
         salt-cloud -f list_monitor_data aliyun
         salt-cloud -f list_monitor_data aliyun name=AY14051311071990225bd
@@ -846,8 +894,8 @@ def _get_node(name):
         except KeyError:
             attempts -= 1
             log.debug(
-                'Failed to get the data for the node {0!r}. Remaining '
-                'attempts {1}'.format(
+                'Failed to get the data for node \'{0}\'. Remaining '
+                'attempts: {1}'.format(
                     name, attempts
                 )
             )
@@ -918,11 +966,12 @@ def destroy(name, call=None):
             '-a or --action.'
         )
 
-    salt.utils.cloud.fire_event(
+    __utils__['cloud.fire_event'](
         'event',
         'destroying instance',
         'salt/cloud/{0}/destroying'.format(name),
-        {'name': name},
+        args={'name': name},
+        sock_dir=__opts__['sock_dir'],
         transport=__opts__['transport']
     )
 
@@ -933,11 +982,12 @@ def destroy(name, call=None):
 
     node = query(params)
 
-    salt.utils.cloud.fire_event(
+    __utils__['cloud.fire_event'](
         'event',
         'destroyed instance',
         'salt/cloud/{0}/destroyed'.format(name),
-        {'name': name},
+        args={'name': name},
+        sock_dir=__opts__['sock_dir'],
         transport=__opts__['transport']
     )
 

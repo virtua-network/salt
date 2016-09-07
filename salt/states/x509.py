@@ -2,7 +2,9 @@
 '''
 Manage X509 Certificates
 
-.. versionadded:: Beryllium
+.. versionadded:: 2015.8.0
+
+:depends: M2Crypto
 
 This module can enable managing a complete PKI infrastructure including creating private keys, CA's,
 certificates and CRLs. It includes the ability to generate a private key on a server, and have the
@@ -13,10 +15,10 @@ Here is a simple example scenario. In this example ``ca`` is the ca server,
 and ``www`` is a web server that needs a certificate signed by ``ca``.
 
 For remote signing, peers must be permitted to remotely call the
-:mod:`pem_managed <salt.states.x509.pem_managed>` function.
+:mod:`sign_remote_certificate <salt.modules.x509.sign_remote_certificate>` function.
 
 
-/etc/salt/master.d/peer.sls
+/etc/salt/master.d/peer.conf
 
 .. code-block:: yaml
 
@@ -47,7 +49,7 @@ the mine where it can be easily retrieved by other minions.
 
     salt-minion:
       service.running:
-        - enabled
+        - enable: True
         - listen:
           - file: /etc/salt/minion.d/signing_policies.conf
 
@@ -56,6 +58,9 @@ the mine where it can be easily retrieved by other minions.
         - source: salt://signing_policies.conf
 
     /etc/pki:
+      file.directory: []
+
+    /etc/pki/issued_certs:
       file.directory: []
 
     /etc/pki/ca.key:
@@ -123,9 +128,12 @@ handle properly formatting the text before writing the output.
 
 .. code-block:: yaml
 
-    /usr/local/share/ca-certificates/intca.crt
+    /usr/local/share/ca-certificates:
+      file.directory: []
+
+    /usr/local/share/ca-certificates/intca.crt:
       x509.pem_managed:
-        - text: {{ salt['mine.get']('pki', 'x509.get_pem_entries')['pki']['/etc/pki/ca.crt']|replace('\\n', '') }}
+        - text: {{ salt['mine.get']('ca', 'x509.get_pem_entries')['ca']['/etc/pki/ca.crt']|replace('\\n', '') }}
 
 
 This state creates a private key then requests a certificate signed by ca according to the www policy.
@@ -153,10 +161,25 @@ This state creates a private key then requests a certificate signed by ca accord
 from __future__ import absolute_import
 import datetime
 import os
+import re
+import copy
 
 # Import Salt Libs
 import salt.exceptions
 import salt.utils
+
+# Import 3rd-party libs
+import salt.ext.six as six
+
+
+def __virtual__():
+    '''
+    only load this module if the corresponding execution module is loaded
+    '''
+    if 'x509.get_pem_entry' in __salt__:
+        return 'x509'
+    else:
+        return (False, 'Could not load x509 state: m2crypto unavailable')
 
 
 def _revoked_to_list(revs):
@@ -167,10 +190,10 @@ def _revoked_to_list(revs):
     list_ = []
 
     for rev in revs:
-        for rev_name, props in rev.iteritems():             # pylint: disable=unused-variable
+        for rev_name, props in six.iteritems(rev):             # pylint: disable=unused-variable
             dict_ = {}
             for prop in props:
-                for propname, val in prop.iteritems():
+                for propname, val in six.iteritems(prop):
                     if isinstance(val, datetime.datetime):
                         val = val.strftime('%Y-%m-%d %H:%M:%S')
                     dict_[propname] = val
@@ -182,9 +205,10 @@ def _revoked_to_list(revs):
 def private_key_managed(name,
                         bits=2048,
                         new=False,
-                        backup=False):
+                        backup=False,
+                        verbose=True,):
     '''
-    Manage a private key's existance.
+    Manage a private key's existence.
 
     name:
         Path to the private key
@@ -198,8 +222,14 @@ def private_key_managed(name,
         whenever a new certificiate is generated.
 
     backup:
-        When replacing an existing file, backup the old file onthe minion.
+        When replacing an existing file, backup the old file on the minion.
         Default is False.
+
+    verbose:
+        Provide visual feedback on stdout, dots while key is generated.
+        Default is True.
+
+        .. versionadded:: Carbon
 
     Example:
 
@@ -247,7 +277,8 @@ def private_key_managed(name,
         bkroot = os.path.join(__opts__['cachedir'], 'file_backup')
         salt.utils.backup_minion(name, bkroot)
 
-    ret['comment'] = __salt__['x509.create_private_key'](path=name, bits=bits)
+    ret['comment'] = __salt__['x509.create_private_key'](
+        path=name, bits=bits, verbose=verbose)
     ret['result'] = True
 
     return ret
@@ -326,11 +357,11 @@ def certificate_managed(name,
         Path to the certificate
 
     days_remaining:
-        The minimum number of days remaining when the certificate should be recreted. Default is 90. A
+        The minimum number of days remaining when the certificate should be recreated. Default is 90. A
         value of 0 disables automatic renewal.
 
     backup:
-        When replacing an existing file, backup the old file onthe minion. Default is False.
+        When replacing an existing file, backup the old file on the minion. Default is False.
 
     kwargs:
         Any arguments supported by :mod:`x509.create_certificate <salt.modules.x509.create_certificate>`
@@ -371,15 +402,25 @@ def certificate_managed(name,
     '''
     ret = {'name': name, 'changes': {}, 'result': False, 'comment': ''}
 
+    if 'path' in kwargs:
+        name = kwargs.pop('path')
+
     current_days_remaining = 0
     current_comp = {}
 
     if os.path.isfile(name):
         try:
             current = __salt__['x509.read_certificate'](certificate=name)
-            current_comp = current.copy()
+            current_comp = copy.deepcopy(current)
             if 'serial_number' not in kwargs:
                 current_comp.pop('Serial Number')
+                if 'signing_cert' not in kwargs:
+                    try:
+                        current_comp['X509v3 Extensions']['authorityKeyIdentifier'] = (
+                            re.sub(r'serial:([0-9A-F]{2}:)*[0-9A-F]{2}', 'serial:--',
+                                current_comp['X509v3 Extensions']['authorityKeyIdentifier']))
+                    except KeyError:
+                        pass
             current_comp.pop('Not Before')
             current_comp.pop('MD5 Finger Print')
             current_comp.pop('SHA1 Finger Print')
@@ -401,10 +442,17 @@ def certificate_managed(name,
     new = __salt__['x509.create_certificate'](testrun=True, **kwargs)
 
     if isinstance(new, dict):
-        new_comp = new.copy()
+        new_comp = copy.deepcopy(new)
         new.pop('Issuer Public Key')
         if 'serial_number' not in kwargs:
             new_comp.pop('Serial Number')
+            if 'signing_cert' not in kwargs:
+                try:
+                    new_comp['X509v3 Extensions']['authorityKeyIdentifier'] = (
+                        re.sub(r'serial:([0-9A-F]{2}:)*[0-9A-F]{2}', 'serial:--',
+                            new_comp['X509v3 Extensions']['authorityKeyIdentifier']))
+                except KeyError:
+                    pass
         new_comp.pop('Not Before')
         new_comp.pop('Not After')
         new_comp.pop('MD5 Finger Print')
@@ -478,7 +526,7 @@ def crl_managed(name,
         Include expired certificates in the CRL. Default is ``False``.
 
     backup:
-        When replacing an existing file, backup the old file onthe minion. Default is False.
+        When replacing an existing file, backup the old file on the minion. Default is False.
 
     Example:
 
@@ -579,15 +627,19 @@ def pem_managed(name,
 
     new = __salt__['x509.get_pem_entry'](text=text)
 
-    if os.path.isfile(name):
-        current = salt.utils.fopen(name).read()
-    else:
-        current = '{0} does not exist.'.format(name)
+    try:
+        with salt.utils.fopen(name) as fp_:
+            current = fp_.read()
+    except (OSError, IOError):
+        current = '{0} does not exist or is unreadable'.format(name)
 
     if new == current:
         ret['result'] = True
         ret['comment'] = 'The file is already in the correct state'
         return ret
+
+    ret['changes']['new'] = new
+    ret['changes']['old'] = current
 
     if __opts__['test'] is True:
         ret['result'] = None

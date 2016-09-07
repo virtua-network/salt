@@ -21,8 +21,7 @@ try:
     from libcloud.compute.providers import get_driver
     from libcloud.compute.deployment import (
         MultiStepDeployment,
-        ScriptDeployment,
-        SSHKeyDeployment
+        ScriptDeployment
     )
     HAS_LIBCLOUD = True
     LIBCLOUD_VERSION_INFO = tuple([
@@ -53,16 +52,34 @@ LIBCLOUD_MINIMAL_VERSION = (0, 14, 0)
 
 
 def node_state(id_):
-    states = {0: 'RUNNING',
-              1: 'REBOOTING',
-              2: 'TERMINATED',
-              3: 'PENDING',
-              4: 'UNKNOWN',
-              5: 'STOPPED',
-              6: 'SUSPENDED',
-              7: 'ERROR',
-              8: 'PAUSED'}
-    return states[id_]
+    '''
+    Libcloud supported node states
+    '''
+    states_int = {
+        0: 'RUNNING',
+        1: 'REBOOTING',
+        2: 'TERMINATED',
+        3: 'PENDING',
+        4: 'UNKNOWN',
+        5: 'STOPPED',
+        6: 'SUSPENDED',
+        7: 'ERROR',
+        8: 'PAUSED'}
+    states_str = {
+        'running': 'RUNNING',
+        'rebooting': 'REBOOTING',
+        'starting': 'STARTING',
+        'terminated': 'TERMINATED',
+        'pending': 'PENDING',
+        'unknown': 'UNKNOWN',
+        'stopping': 'STOPPING',
+        'stopped': 'STOPPED',
+        'suspended': 'SUSPENDED',
+        'error': 'ERROR',
+        'paused': 'PAUSED',
+        'reconfiguring': 'RECONFIGURING'
+    }
+    return states_str[id_] if isinstance(id_, string_types) else states_int[id_]
 
 
 def check_libcloud_version(reqver=LIBCLOUD_MINIMAL_VERSION, why=None):
@@ -105,23 +122,8 @@ def get_node(conn, name):
     nodes = conn.list_nodes()
     for node in nodes:
         if node.name == name:
-            salt.utils.cloud.cache_node(salt.utils.cloud.simple_types_filter(node.__dict__), __active_provider_name__, __opts__)
+            __utils__['cloud.cache_node'](salt.utils.simple_types_filter(node.__dict__), __active_provider_name__, __opts__)
             return node
-
-
-def ssh_pub(vm_):
-    '''
-    Deploy the primary ssh authentication key
-    '''
-    ssh = config.get_cloud_config_value('ssh_auth', vm_, __opts__)
-    if not ssh:
-        return None
-
-    ssh = os.path.expanduser(ssh)
-    if os.path.isfile(ssh):
-        return None
-    with salt.utils.fopen(ssh) as fhr:
-        return SSHKeyDeployment(fhr.read())
 
 
 def avail_locations(conn=None, call=None):
@@ -141,7 +143,7 @@ def avail_locations(conn=None, call=None):
     locations = conn.list_locations()
     ret = {}
     for img in locations:
-        if isinstance(img.name, string_types):
+        if isinstance(img.name, string_types) and not six.PY3:
             img_name = img.name.encode('ascii', 'salt-cloud-force-ascii')
         else:
             img_name = str(img.name)
@@ -152,7 +154,7 @@ def avail_locations(conn=None, call=None):
                 continue
 
             attr_value = getattr(img, attr)
-            if isinstance(attr_value, string_types):
+            if isinstance(attr_value, string_types) and not six.PY3:
                 attr_value = attr_value.encode(
                     'ascii', 'salt-cloud-force-ascii'
                 )
@@ -178,7 +180,7 @@ def avail_images(conn=None, call=None):
     images = conn.list_images()
     ret = {}
     for img in images:
-        if isinstance(img.name, string_types):
+        if isinstance(img.name, string_types) and not six.PY3:
             img_name = img.name.encode('ascii', 'salt-cloud-force-ascii')
         else:
             img_name = str(img.name)
@@ -188,7 +190,7 @@ def avail_images(conn=None, call=None):
             if attr.startswith('_'):
                 continue
             attr_value = getattr(img, attr)
-            if isinstance(attr_value, string_types):
+            if isinstance(attr_value, string_types) and not six.PY3:
                 attr_value = attr_value.encode(
                     'ascii', 'salt-cloud-force-ascii'
                 )
@@ -213,7 +215,7 @@ def avail_sizes(conn=None, call=None):
     sizes = conn.list_sizes()
     ret = {}
     for size in sizes:
-        if isinstance(size.name, string_types):
+        if isinstance(size.name, string_types) and not six.PY3:
             size_name = size.name.encode('ascii', 'salt-cloud-force-ascii')
         else:
             size_name = str(size.name)
@@ -228,7 +230,7 @@ def avail_sizes(conn=None, call=None):
             except Exception:
                 pass
 
-            if isinstance(attr_value, string_types):
+            if isinstance(attr_value, string_types) and not six.PY3:
                 attr_value = attr_value.encode(
                     'ascii', 'salt-cloud-force-ascii'
                 )
@@ -241,17 +243,19 @@ def get_location(conn, vm_):
     Return the location object to use
     '''
     locations = conn.list_locations()
-    vm_location = config.get_cloud_config_value('location', vm_, __opts__).encode(
-        'ascii', 'salt-cloud-force-ascii'
-    )
+    vm_location = config.get_cloud_config_value('location', vm_, __opts__)
+    if not six.PY3:
+        vm_location = vm_location.encode(
+            'ascii', 'salt-cloud-force-ascii'
+        )
 
     for img in locations:
-        if isinstance(img.id, string_types):
+        if isinstance(img.id, string_types) and not six.PY3:
             img_id = img.id.encode('ascii', 'salt-cloud-force-ascii')
         else:
             img_id = str(img.id)
 
-        if isinstance(img.name, string_types):
+        if isinstance(img.name, string_types) and not six.PY3:
             img_name = img.name.encode('ascii', 'salt-cloud-force-ascii')
         else:
             img_name = str(img.name)
@@ -260,7 +264,7 @@ def get_location(conn, vm_):
             return img
 
     raise SaltCloudNotFound(
-        'The specified location, {0!r}, could not be found.'.format(
+        'The specified location, \'{0}\', could not be found.'.format(
             vm_location
         )
     )
@@ -271,18 +275,18 @@ def get_image(conn, vm_):
     Return the image object to use
     '''
     images = conn.list_images()
+    vm_image = config.get_cloud_config_value('image', vm_, __opts__)
 
-    vm_image = config.get_cloud_config_value('image', vm_, __opts__).encode(
-        'ascii', 'salt-cloud-force-ascii'
-    )
+    if not six.PY3:
+        vm_image = vm_image.encode('ascii', 'salt-cloud-force-ascii')
 
     for img in images:
-        if isinstance(img.id, string_types):
+        if isinstance(img.id, string_types) and not six.PY3:
             img_id = img.id.encode('ascii', 'salt-cloud-force-ascii')
         else:
             img_id = str(img.id)
 
-        if isinstance(img.name, string_types):
+        if isinstance(img.name, string_types) and not six.PY3:
             img_name = img.name.encode('ascii', 'salt-cloud-force-ascii')
         else:
             img_name = str(img.name)
@@ -291,7 +295,7 @@ def get_image(conn, vm_):
             return img
 
     raise SaltCloudNotFound(
-        'The specified image, {0!r}, could not be found.'.format(vm_image)
+        'The specified image, \'{0}\', could not be found.'.format(vm_image)
     )
 
 
@@ -308,7 +312,7 @@ def get_size(conn, vm_):
         if vm_size and str(vm_size) in (str(size.id), str(size.name)):
             return size
     raise SaltCloudNotFound(
-        'The specified size, {0!r}, could not be found.'.format(vm_size)
+        'The specified size, \'{0}\', could not be found.'.format(vm_size)
     )
 
 
@@ -338,11 +342,12 @@ def destroy(name, conn=None, call=None):
             '-a or --action.'
         )
 
-    salt.utils.cloud.fire_event(
+    __utils__['cloud.fire_event'](
         'event',
         'destroying instance',
         'salt/cloud/{0}/destroying'.format(name),
-        {'name': name},
+        args={'name': name},
+        sock_dir=__opts__['sock_dir'],
         transport=__opts__['transport']
     )
 
@@ -356,13 +361,20 @@ def destroy(name, conn=None, call=None):
     profile = None
     if 'metadata' in node.extra and 'profile' in node.extra['metadata']:
         profile = node.extra['metadata']['profile']
+
     flush_mine_on_destroy = False
-    if profile is not None and profile in profiles:
-        if 'flush_mine_on_destroy' in profiles[profile]:
-            flush_mine_on_destroy = profiles[profile]['flush_mine_on_destroy']
+    if profile and profile in profiles and 'flush_mine_on_destroy' in profiles[profile]:
+        flush_mine_on_destroy = profiles[profile]['flush_mine_on_destroy']
+
     if flush_mine_on_destroy:
         log.info('Clearing Salt Mine: {0}'.format(name))
-        client = salt.client.get_local_client(__opts__['conf_file'])
+
+        mopts_ = salt.config.DEFAULT_MINION_OPTS
+        conf_path = '/'.join(__opts__['conf_file'].split('/')[:-1])
+        mopts_.update(
+            salt.config.minion_config(os.path.join(conf_path, 'minion'))
+        )
+        client = salt.client.get_local_client(mopts_)
         minions = client.cmd(name, 'mine.flush')
 
     log.info('Clearing Salt Mine: {0}, {1}'.format(name, flush_mine_on_destroy))
@@ -371,17 +383,25 @@ def destroy(name, conn=None, call=None):
     if ret:
         log.info('Destroyed VM: {0}'.format(name))
         # Fire destroy action
-        salt.utils.cloud.fire_event(
+        __utils__['cloud.fire_event'](
             'event',
             'destroyed instance',
             'salt/cloud/{0}/destroyed'.format(name),
-            {'name': name},
+            args={'name': name},
+            sock_dir=__opts__['sock_dir'],
             transport=__opts__['transport']
         )
         if __opts__['delete_sshkeys'] is True:
-            salt.utils.cloud.remove_sshkey(getattr(node, __opts__.get('ssh_interface', 'public_ips'))[0])
+            public_ips = getattr(node, __opts__.get('ssh_interface', 'public_ips'))
+            if public_ips:
+                salt.utils.cloud.remove_sshkey(public_ips[0])
+
+            private_ips = getattr(node, __opts__.get('ssh_interface', 'private_ips'))
+            if private_ips:
+                salt.utils.cloud.remove_sshkey(private_ips[0])
+
         if __opts__.get('update_cachedir', False) is True:
-            salt.utils.cloud.delete_minion_cachedir(name, __active_provider_name__.split(':')[0], __opts__)
+            __utils__['cloud.delete_minion_cachedir'](name, __active_provider_name__.split(':')[0], __opts__)
 
         return True
 
@@ -404,11 +424,12 @@ def reboot(name, conn=None):
     if ret:
         log.info('Rebooted VM: {0}'.format(name))
         # Fire reboot action
-        salt.utils.cloud.fire_event(
+        __utils__['cloud.fire_event'](
             'event',
             '{0} has been rebooted'.format(name), 'salt-cloud'
             'salt/cloud/{0}/rebooting'.format(name),
-            {'name': name},
+            args={'name': name},
+            sock_dir=__opts__['sock_dir'],
             transport=__opts__['transport']
         )
         return True
@@ -435,6 +456,7 @@ def list_nodes(conn=None, call=None):
         ret[node.name] = {
             'id': node.id,
             'image': node.image,
+            'name': node.name,
             'private_ips': node.private_ips,
             'public_ips': node.public_ips,
             'size': node.size,
@@ -464,7 +486,7 @@ def list_nodes_full(conn=None, call=None):
         ret[node.name] = pairs
         del ret[node.name]['driver']
 
-    salt.utils.cloud.cache_node_list(ret, __active_provider_name__.split(':')[0], __opts__)
+    __utils__['cloud.cache_node_list'](ret, __active_provider_name__.split(':')[0], __opts__)
     return ret
 
 
@@ -490,7 +512,7 @@ def show_instance(name, call=None):
         )
 
     nodes = list_nodes_full()
-    salt.utils.cloud.cache_node(nodes[name], __active_provider_name__, __opts__)
+    __utils__['cloud.cache_node'](nodes[name], __active_provider_name__, __opts__)
     return nodes[name]
 
 
@@ -502,27 +524,8 @@ def conn_has_method(conn, method_name):
         return True
 
     log.error(
-        'Method {0!r} not yet supported!'.format(
+        'Method \'{0}\' not yet supported!'.format(
             method_name
         )
     )
     return False
-
-
-def get_salt_interface(vm_):
-    '''
-    Return the salt_interface type to connect to. Either 'public_ips' (default)
-    or 'private_ips'.
-    '''
-    salt_host = config.get_cloud_config_value(
-        'salt_interface', vm_, __opts__, default=False,
-        search_global=False
-    )
-
-    if salt_host is False:
-        salt_host = config.get_cloud_config_value(
-            'ssh_interface', vm_, __opts__, default='public_ips',
-            search_global=False
-        )
-
-    return salt_host

@@ -5,22 +5,36 @@ Send events covering service status
 
 # Import Python Libs
 from __future__ import absolute_import
-
 import logging
-import psutil
+
+# Import third party libs
+# pylint: disable=import-error
+try:
+    import salt.utils.psutil_compat as psutil
+    HAS_PSUTIL = True
+except ImportError:
+    HAS_PSUTIL = False
+# pylint: enable=import-error
 
 log = logging.getLogger(__name__)  # pylint: disable=invalid-name
 
+__virtualname__ = 'ps'
 
-def validate(config):
+
+def __virtual__():
+    if not HAS_PSUTIL:
+        return (False, 'cannot load network_info beacon: psutil not available')
+    return __virtualname__
+
+
+def __validate__(config):
     '''
     Validate the beacon configuration
     '''
     # Configuration for ps beacon should be a list of dicts
     if not isinstance(config, dict):
-        log.info('Configuration for ps beacon must be a dictionary.')
-        return False
-    return True
+        return False, ('Configuration for ps beacon must be a dictionary.')
+    return True, 'Valid beacon configuration'
 
 
 def beacon(config):
@@ -35,7 +49,6 @@ def beacon(config):
           ps:
             salt-master: running
             mysql: stopped
-
 
     The config above sets up beacons to check that
     processes are running or stopped.

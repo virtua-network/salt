@@ -30,7 +30,8 @@ from numbers import Number
 # Import salt libs
 import salt.output
 from salt.ext.six import string_types
-from salt.utils import get_colors, sdecode
+from salt.utils import get_colors
+import salt.utils.locales
 
 
 class NestDisplay(object):
@@ -62,7 +63,7 @@ class NestDisplay(object):
         try:
             return fmt.format(indent, color, prefix, msg, endc, suffix)
         except UnicodeDecodeError:
-            return fmt.format(indent, color, prefix, sdecode(msg), endc, suffix)
+            return fmt.format(indent, color, prefix, salt.utils.locales.sdecode(msg), endc, suffix)
 
     def display(self, ret, indent, prefix, out):
         '''
@@ -89,17 +90,20 @@ class NestDisplay(object):
                 )
             )
         elif isinstance(ret, string_types):
+            first_line = True
             for line in ret.splitlines():
                 if self.strip_colors:
                     line = salt.output.strip_esc_sequence(line)
+                line_prefix = ' ' * len(prefix) if not first_line else prefix
                 out.append(
                     self.ustring(
                         indent,
                         self.GREEN,
                         line,
-                        prefix=prefix
+                        prefix=line_prefix
                     )
                 )
+                first_line = False
         elif isinstance(ret, (list, tuple)):
             for ind in ret:
                 if isinstance(ind, (list, tuple, dict)):

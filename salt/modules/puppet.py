@@ -5,6 +5,7 @@ Execute puppet routines
 
 # Import python libs
 from __future__ import absolute_import
+from distutils import version
 import logging
 import os
 import datetime
@@ -16,7 +17,7 @@ from salt.exceptions import CommandExecutionError
 # Import 3rd-party libs
 import yaml
 import salt.ext.six as six
-
+from salt.ext.six.moves import range
 log = logging.getLogger(__name__)
 
 
@@ -24,26 +25,14 @@ def __virtual__():
     '''
     Only load if puppet is installed
     '''
-    if salt.utils.which('facter'):
+    unavailable_exes = ', '.join(exe for exe in ('facter', 'puppet')
+                                 if salt.utils.which(exe) is None)
+    if unavailable_exes:
+        return (False,
+                ('The puppet execution module cannot be loaded: '
+                 '{0} unavailable.'.format(unavailable_exes)))
+    else:
         return 'puppet'
-    return False
-
-
-def _check_puppet():
-    '''
-    Checks if puppet is installed
-    '''
-    # I thought about making this a virtual module, but then I realized that I
-    # would require the minion to restart if puppet was installed after the
-    # minion was started, and that would be rubbish
-    salt.utils.check_or_die('puppet')
-
-
-def _check_facter():
-    '''
-    Checks if facter is installed
-    '''
-    salt.utils.check_or_die('facter')
 
 
 def _format_fact(output):
@@ -76,10 +65,17 @@ class _Puppet(object):
             self.vardir = 'C:\\ProgramData\\PuppetLabs\\puppet\\var'
             self.rundir = 'C:\\ProgramData\\PuppetLabs\\puppet\\run'
             self.confdir = 'C:\\ProgramData\\PuppetLabs\\puppet\\etc'
+            self.useshell = True
         else:
-            if 'Enterprise' in __salt__['cmd.run']('puppet --version'):
+            self.useshell = False
+            self.puppet_version = __salt__['cmd.run']('puppet --version')
+            if 'Enterprise' in self.puppet_version:
                 self.vardir = '/var/opt/lib/pe-puppet'
                 self.rundir = '/var/opt/run/pe-puppet'
+                self.confdir = '/etc/puppetlabs/puppet'
+            elif self.puppet_version != [] and version.StrictVersion(self.puppet_version) >= version.StrictVersion('4.0.0'):
+                self.vardir = '/opt/puppetlabs/puppet/cache'
+                self.rundir = '/var/run/puppetlabs'
                 self.confdir = '/etc/puppetlabs/puppet'
             else:
                 self.vardir = '/var/lib/puppet'
@@ -95,7 +91,6 @@ class _Puppet(object):
         '''
         Format the command string to executed using cmd.run_all.
         '''
-
         cmd = 'puppet {subcmd} --vardir {vardir} --confdir {confdir}'.format(
             **self.__dict__
         )
@@ -154,23 +149,24 @@ def run(*args, **kwargs):
         salt '*' puppet.run debug
         salt '*' puppet.run apply /a/b/manifest.pp modulepath=/a/b/modules tags=basefiles::edit,apache::server
     '''
-    _check_puppet()
     puppet = _Puppet()
 
-    if args:
+    # new args tuple to filter out agent/apply for _Puppet.arguments()
+    buildargs = ()
+    for arg in range(len(args)):
         # based on puppet documentation action must come first. making the same
         # assertion. need to ensure the list of supported cmds here matches
         # those defined in _Puppet.arguments()
-        if args[0] in ['agent', 'apply']:
-            puppet.subcmd = args[0]
-            puppet.arguments(args[1:])
-    else:
-        # args will exist as an empty list even if none have been provided
-        puppet.arguments(args)
+        if args[arg] in ['agent', 'apply']:
+            puppet.subcmd = args[arg]
+        else:
+            buildargs += (args[arg],)
+    # args will exist as an empty list even if none have been provided
+    puppet.arguments(buildargs)
 
     puppet.kwargs.update(salt.utils.clean_kwargs(**kwargs))
 
-    ret = __salt__['cmd.run_all'](repr(puppet), python_shell=False)
+    ret = __salt__['cmd.run_all'](repr(puppet), python_shell=puppet.useshell)
     if ret['retcode'] in [0, 2]:
         ret['retcode'] = 0
     else:
@@ -209,8 +205,6 @@ def enable():
 
         salt '*' puppet.enable
     '''
-
-    _check_puppet()
     puppet = _Puppet()
 
     if os.path.isfile(puppet.disabled_lockfile):
@@ -225,20 +219,25 @@ def enable():
     return False
 
 
-def disable():
+def disable(message=None):
     '''
     .. versionadded:: 2014.7.0
 
     Disable the puppet agent
+
+    message
+        .. versionadded:: 2015.5.2
+
+        Disable message to send to puppet
 
     CLI Example:
 
     .. code-block:: bash
 
         salt '*' puppet.disable
+        salt '*' puppet.disable 'Disabled, contact XYZ before enabling'
     '''
 
-    _check_puppet()
     puppet = _Puppet()
 
     if os.path.isfile(puppet.disabled_lockfile):
@@ -247,7 +246,8 @@ def disable():
         with salt.utils.fopen(puppet.disabled_lockfile, 'w') as lockfile:
             try:
                 # Puppet chokes when no valid json is found
-                lockfile.write('{}')
+                str = '{{"disabled_message":"{0}"}}'.format(message) if message is not None else '{}'
+                lockfile.write(str)
                 lockfile.close()
                 return True
             except (IOError, OSError) as exc:
@@ -268,7 +268,6 @@ def status():
 
         salt '*' puppet.status
     '''
-    _check_puppet()
     puppet = _Puppet()
 
     if os.path.isfile(puppet.disabled_lockfile):
@@ -310,7 +309,6 @@ def summary():
         salt '*' puppet.summary
     '''
 
-    _check_puppet()
     puppet = _Puppet()
 
     try:
@@ -354,9 +352,6 @@ def plugin_sync():
 
         salt '*' puppet.plugin_sync
     '''
-
-    _check_puppet()
-
     ret = __salt__['cmd.run']('puppet plugin download')
 
     if not ret:
@@ -374,8 +369,6 @@ def facts(puppet=False):
 
         salt '*' puppet.facts
     '''
-    _check_facter()
-
     ret = {}
     opt_puppet = '--puppet' if puppet else ''
     output = __salt__['cmd.run']('facter {0}'.format(opt_puppet))
@@ -403,8 +396,6 @@ def fact(name, puppet=False):
 
         salt '*' puppet.fact kernel
     '''
-    _check_facter()
-
     opt_puppet = '--puppet' if puppet else ''
     ret = __salt__['cmd.run'](
             'facter {0} {1}'.format(opt_puppet, name),

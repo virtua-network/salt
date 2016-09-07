@@ -6,7 +6,10 @@ master to the minion and vice-versa.
 from __future__ import absolute_import
 # Import Python libs
 import collections
+import logging
 import os
+import sys
+import traceback
 
 # Import salt libs
 import salt.crypt
@@ -16,6 +19,7 @@ import salt.transport
 import salt.ext.six as six
 
 __proxyenabled__ = ['*']
+log = logging.getLogger(__name__)
 
 
 def _dict_subset(keys, master_dict):
@@ -35,6 +39,10 @@ def fire_master(data, tag, preload=None):
 
         salt '*' event.fire_master '{"data":"my event data"}' 'tag'
     '''
+    if (__opts__.get('local', None) or __opts__.get('file_client', None) == 'local') and not __opts__.get('use_master_when_local', False):
+        #  We can't send an event if we're in masterless mode
+        log.warning('Local mode detected. Event with tag {0} will NOT be sent.'.format(tag))
+        return False
     if __opts__['transport'] == 'raet':
         channel = salt.transport.Channel.factory(__opts__)
         load = {'id': __opts__['id'],
@@ -47,16 +55,23 @@ def fire_master(data, tag, preload=None):
             pass
         return True
 
-    if preload:
+    if preload or __opts__.get('__cli') == 'salt-call':
         # If preload is specified, we must send a raw event (this is
         # slower because it has to independently authenticate)
-        load = preload
+        if 'master_uri' not in __opts__:
+            __opts__['master_uri'] = 'tcp://{ip}:{port}'.format(
+                    ip=salt.utils.ip_bracket(__opts__['interface']),
+                    port=__opts__.get('ret_port', '4506')  # TODO, no fallback
+                    )
         auth = salt.crypt.SAuth(__opts__)
-        load.update({'id': __opts__['id'],
+        load = {'id': __opts__['id'],
                 'tag': tag,
                 'data': data,
                 'tok': auth.gen_token('salt'),
-                'cmd': '_minion_event'})
+                'cmd': '_minion_event'}
+
+        if isinstance(preload, dict):
+            load.update(preload)
 
         channel = salt.transport.Channel.factory(__opts__)
         try:
@@ -68,9 +83,12 @@ def fire_master(data, tag, preload=None):
         # Usually, we can send the event via the minion, which is faster
         # because it is already authenticated
         try:
-            return salt.utils.event.MinionEvent(__opts__).fire_event(
+            return salt.utils.event.MinionEvent(__opts__, listen=False).fire_event(
                 {'data': data, 'tag': tag, 'events': None, 'pretag': None}, 'fire_master')
         except Exception:
+            exc_type, exc_value, exc_traceback = sys.exc_info()
+            lines = traceback.format_exception(exc_type, exc_value, exc_traceback)
+            log.debug(lines)
             return False
 
 
@@ -93,6 +111,9 @@ def fire(data, tag):
 
         return event.fire_event(data, tag)
     except Exception:
+        exc_type, exc_value, exc_traceback = sys.exc_info()
+        lines = traceback.format_exception(exc_type, exc_value, exc_traceback)
+        log.debug(lines)
         return False
 
 
@@ -102,6 +123,7 @@ def send(tag,
         with_env=False,
         with_grains=False,
         with_pillar=False,
+        with_env_opts=False,
         **kwargs):
     '''
     Send an event to the Salt Master
@@ -139,6 +161,11 @@ def send(tag,
     :type with_pillar: Specify ``True`` to include all Pillar values, or
         specify a list of strings of Pillar keys to include. It is a
         best-practice to only specify a relevant subset of Pillar data.
+
+    :param with_env_opts: Include ``saltenv`` and ``pillarenv`` set on minion
+        at the moment when event is send into event data.
+    :type with_env_opts: Specify ``True`` to include ``saltenv`` and
+        ``pillarenv`` values or ``False`` to omit them.
 
     :param kwargs: Any additional keyword arguments passed to this function
         will be interpreted as key-value pairs and included in the event data.
@@ -187,6 +214,10 @@ def send(tag,
             data_dict['pillar'] = _dict_subset(with_pillar, __pillar__)
         else:
             data_dict['pillar'] = __pillar__
+
+    if with_env_opts:
+        data_dict['saltenv'] = __opts__.get('environment', 'base')
+        data_dict['pillarenv'] = __opts__.get('pillarenv')
 
     if kwargs:
         data_dict.update(kwargs)

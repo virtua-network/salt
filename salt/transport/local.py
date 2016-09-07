@@ -1,10 +1,11 @@
 # -*- coding: utf-8 -*-
 
 # Import Python Libs
-from __future__ import absolute_import
+from __future__ import absolute_import, print_function
 import logging
 
 # Import Salt Libs
+import salt.utils
 from salt.transport.client import ReqChannel
 
 log = logging.getLogger(__name__)
@@ -19,19 +20,19 @@ class LocalChannel(ReqChannel):
         self.kwargs = kwargs
         self.tries = 0
 
-    def send(self, load, tries=3, timeout=60):
+    def send(self, load, tries=3, timeout=60, raw=False):
 
         if self.tries == 0:
             log.debug('LocalChannel load: {0}').format(load)
             #data = json.loads(load)
             #{'path': 'apt-cacher-ng/map.jinja', 'saltenv': 'base', 'cmd': '_serve_file', 'loc': 0}
             #f = open(data['path'])
-            f = open(load['path'])
-            ret = {
-                'data': ''.join(f.readlines()),
-                'dest': load['path'],
-            }
-            print ('returning', ret)
+            with salt.utils.fopen(load['path']) as f:
+                ret = {
+                    'data': ''.join(f.readlines()),
+                    'dest': load['path'],
+                }
+                print('returning', ret)
         else:
             # end of buffer
             ret = {
@@ -42,4 +43,7 @@ class LocalChannel(ReqChannel):
         return ret
 
     def crypted_transfer_decode_dictentry(self, load, dictkey=None, tries=3, timeout=60):
-        super(LocalChannel, self).crypted_transfer_decode_dictentry()
+        super(LocalChannel, self).crypted_transfer_decode_dictentry(load,
+                                                                    dictkey=dictkey,
+                                                                    tries=tries,
+                                                                    timeout=timeout)

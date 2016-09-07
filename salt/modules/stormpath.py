@@ -2,7 +2,7 @@
 '''
 Support for Stormpath
 
-.. versionadded:: Beryllium
+.. versionadded:: 2015.8.0
 '''
 
 # Import python libs
@@ -21,9 +21,9 @@ def __virtual__():
     Only load the module if apache is installed
     '''
     if not __opts__.get('stormpath', {}).get('apiid', None):
-        return False
+        return (False, 'The stormpath execution module failed to load: requires the stormpath:apiid config option to be set.')
     if not __opts__.get('stormpath', {}).get('apikey', None):
-        return False
+        return (False, 'The stormpath execution module failed to load: requires the stormpath:apikey config option to be set.')
     return True
 
 
@@ -35,7 +35,6 @@ def create_account(directory_id, email, password, givenName, surname, **kwargs):
 
         salt myminion stormpath.create_account <directory_id> shemp@example.com letmein Shemp Howard
 
-    .. versionadded:: Beryllium
     '''
     items = {
         'email': email,
@@ -65,7 +64,6 @@ def list_accounts():
 
         salt myminion stormpath.list_accounts
 
-    .. versionadded:: Beryllium
     '''
     status, result = _query(action='accounts', command='current')
     return result
@@ -84,7 +82,6 @@ def show_account(account_id=None,
 
         salt myminion stormpath.show_account <account_id>
 
-    .. versionadded:: Beryllium
     '''
     if account_id:
         status, result = _query(
@@ -130,7 +127,6 @@ def update_account(account_id, key=None, value=None, items=None):
         salt myminion stormpath.update_account <account_id> items='{"givenName": "Shemp"}
         salt myminion stormpath.update_account <account_id> items='{"middlename": ""}
 
-    .. versionadded:: Beryllium
     '''
     if items is None:
         if key is None or value is None:
@@ -150,7 +146,7 @@ def update_account(account_id, key=None, value=None, items=None):
 
 def delete_account(account_id):
     '''
-    Delete an account
+    Delete an account.
 
     CLI Examples:
 
@@ -173,10 +169,18 @@ def list_directories():
 
         salt myminion stormpath.list_directories
 
-    .. versionadded:: Beryllium
     '''
-    tenant = __opts__.get('stormpath', {}).get('tenantid', None)
-    status, result = _query(action='tenants', command='{0}/directories'.format(tenant))
+    tenant = show_tenant()
+    tenant_id = tenant.get('href', '').split('/')[-1]
+    status, result = _query(action='tenants', command='{0}/directories'.format(tenant_id))
+    return result
+
+
+def show_tenant():
+    '''
+    Get the tenant for the login being used.
+    '''
+    status, result = _query(action='tenants', command='current')
     return result
 
 
@@ -187,9 +191,7 @@ def _query(action=None,
            header_dict=None,
            data=None):
     '''
-    Make a web call to Stormpath
-
-    .. versionadded:: Beryllium
+    Make a web call to Stormpath.
     '''
     apiid = __opts__.get('stormpath', {}).get('apiid', None)
     apikey = __opts__.get('stormpath', {}).get('apikey', None)

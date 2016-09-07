@@ -2,16 +2,15 @@
 '''
 The jail module for FreeBSD
 '''
-from __future__ import absolute_import
 
 # Import python libs
+from __future__ import absolute_import
 import os
-import subprocess
-import shlex
 import re
 
 # Import salt libs
 import salt.utils
+from salt._compat import subprocess
 
 # Define the module's virtual name
 __virtualname__ = 'jail'
@@ -21,7 +20,10 @@ def __virtual__():
     '''
     Only runs on FreeBSD systems
     '''
-    return __virtualname__ if __grains__['os'] == 'FreeBSD' else False
+    if __grains__['os'] == 'FreeBSD':
+        return __virtualname__
+    return (False, 'The freebsdjail execution module cannot be loaded: '
+            'only available on FreeBSD systems.')
 
 
 def start(jail=''):
@@ -121,8 +123,8 @@ def show_config(jail):
     '''
     ret = {}
     if subprocess.call(["jls", "-nq", "-j", jail]) == 0:
-        jls = subprocess.check_output(["jls", "-nq", "-j", jail])
-        jailopts = shlex.split(jls)
+        jls = subprocess.check_output(["jls", "-nq", "-j", jail])  # pylint: disable=minimum-python-version
+        jailopts = salt.utils.shlex_split(salt.utils.to_str(jls))
         for jailopt in jailopts:
             if '=' not in jailopt:
                 ret[jailopt.strip().rstrip(";")] = '1'

@@ -9,7 +9,7 @@ This returner will send data from the minions to a MongoDB server. To
 configure the settings for your MongoDB server, add the following lines
 to the minion config files:
 
-.. cod-block:: yaml
+.. code-block:: yaml
 
     mongo.db: <database name>
     mongo.host: <server ip address>
@@ -19,6 +19,8 @@ to the minion config files:
 
 You can also ask for indexes creation on the most common used fields, which
 should greatly improve performance. Indexes are not created by default.
+
+.. code-block:: yaml
 
     mongo.indexes: true
 
@@ -46,11 +48,20 @@ To use the mongo returner, append '--return mongo' to the salt command.
 
 To use the alternative configuration, append '--return_config alternative' to the salt command.
 
-.. versionadded:: 2015.2.0
+.. versionadded:: 2015.5.0
 
 .. code-block:: bash
 
     salt '*' test.ping --return mongo --return_config alternative
+
+To override individual configuration items, append --return_kwargs '{"key:": "value"}' to the salt command.
+
+.. versionadded:: 2016.3.0
+
+.. code-block:: bash
+
+    salt '*' test.ping --return mongo --return_kwargs '{"db": "another-salt"}'
+
 '''
 from __future__ import absolute_import
 
@@ -62,9 +73,12 @@ import salt.utils.jid
 import salt.returners
 import salt.ext.six as six
 
+
 # Import third party libs
 try:
     import pymongo
+    version = pymongo.version
+    version = '.'.join(version.split('.')[:2])
     HAS_PYMONGO = True
 except ImportError:
     HAS_PYMONGO = False
@@ -100,7 +114,7 @@ def _get_options(ret=None):
     attrs = {'host': 'host',
              'port': 'port',
              'db': 'db',
-             'username': 'username',
+             'user': 'user',
              'password': 'password',
              'indexes': 'indexes'}
 
@@ -125,17 +139,30 @@ def _get_conn(ret):
     password = _options.get('password')
     indexes = _options.get('indexes', False)
 
-    conn = pymongo.Connection(host, port)
+    # at some point we should remove support for
+    # pymongo versions < 2.3 until then there are
+    # a bunch of these sections that need to be supported
+
+    if float(version) > 2.3:
+        conn = pymongo.MongoClient(host, port)
+    else:
+        conn = pymongo.Connection(host, port)
     mdb = conn[db_]
 
     if user and password:
         mdb.authenticate(user, password)
 
     if indexes:
-        mdb.saltReturns.ensure_index('minion')
-        mdb.saltReturns.ensure_index('jid')
-
-        mdb.jobs.ensure_index('jid')
+        if float(version) > 2.3:
+            mdb.saltReturns.create_index('minion')
+            mdb.saltReturns.create_index('jid')
+            mdb.jobs.create_index('jid')
+            mdb.events.create_index('tag')
+        else:
+            mdb.saltReturns.ensure_index('minion')
+            mdb.saltReturns.ensure_index('jid')
+            mdb.jobs.ensure_index('jid')
+            mdb.events.ensure_index('tag')
 
     return conn, mdb
 
@@ -160,18 +187,37 @@ def returner(ret):
     sdata = {'minion': ret['id'], 'jid': ret['jid'], 'return': back, 'fun': ret['fun'], 'full_ret': full_ret}
     if 'out' in ret:
         sdata['out'] = ret['out']
+
     # save returns in the saltReturns collection in the json format:
     # { 'minion': <minion_name>, 'jid': <job_id>, 'return': <return info with dots removed>,
     #   'fun': <function>, 'full_ret': <unformatted return with dots removed>}
-    mdb.saltReturns.insert(sdata)
+    #
+    # again we run into the issue with deprecated code from previous versions
+
+    if float(version) > 2.3:
+        #using .copy() to ensure that the original data is not changed, raising issue with pymongo team
+        mdb.saltReturns.insert_one(sdata.copy())
+    else:
+        mdb.saltReturns.insert(sdata.copy())
 
 
-def save_load(jid, load):
+def save_load(jid, load, minions=None):
     '''
     Save the load for a given job id
     '''
     conn, mdb = _get_conn(ret=None)
-    mdb.jobs.insert(load)
+    if float(version) > 2.3:
+        #using .copy() to ensure original data for load is unchanged
+        mdb.jobs.insert_one(load.copy())
+    else:
+        mdb.jobs.insert(load.copy())
+
+
+def save_minions(jid, minions):  # pylint: disable=unused-argument
+    '''
+    Included for API consistency
+    '''
+    pass
 
 
 def get_load(jid):
@@ -179,8 +225,7 @@ def get_load(jid):
     Return the load associated with a given job id
     '''
     conn, mdb = _get_conn(ret=None)
-    ret = mdb.jobs.find_one({'jid': jid})
-    return ret['load']
+    return mdb.jobs.find_one({'jid': jid}, {'_id': 0})
 
 
 def get_jid(jid):
@@ -189,7 +234,7 @@ def get_jid(jid):
     '''
     conn, mdb = _get_conn(ret=None)
     ret = {}
-    rdata = mdb.saltReturns.find({'jid': jid})
+    rdata = mdb.saltReturns.find({'jid': jid}, {'_id': 0})
     if rdata:
         for data in rdata:
             minion = data['minion']
@@ -204,7 +249,7 @@ def get_fun(fun):
     '''
     conn, mdb = _get_conn(ret=None)
     ret = {}
-    rdata = mdb.saltReturns.find_one({'fun': fun})
+    rdata = mdb.saltReturns.find_one({'fun': fun}, {'_id': 0})
     if rdata:
         ret = rdata
     return ret
@@ -226,9 +271,13 @@ def get_jids():
     Return a list of job ids
     '''
     conn, mdb = _get_conn(ret=None)
-    ret = []
-    name = mdb.jobs.distinct('jid')
-    ret.append(name)
+    map = "function() { emit(this.jid, this); }"
+    reduce = "function (key, values) { return values[0]; }"
+    result = mdb.jobs.inline_map_reduce(map, reduce)
+    ret = {}
+    for r in result:
+        jid = r['_id']
+        ret[jid] = salt.utils.jid.format_jid_instance(jid, r['value'])
     return ret
 
 
@@ -237,3 +286,21 @@ def prep_jid(nocache=False, passed_jid=None):  # pylint: disable=unused-argument
     Do any work necessary to prepare a JID, including sending a custom id
     '''
     return passed_jid if passed_jid is not None else salt.utils.jid.gen_jid()
+
+
+def event_return(events):
+    '''
+    Return events to Mongodb server
+    '''
+    conn, mdb = _get_conn(ret=None)
+
+    if isinstance(events, list):
+        events = events[0]
+
+    if isinstance(events, dict):
+        log.debug(events)
+
+        if float(version) > 2.3:
+            mdb.events.insert_one(events.copy())
+        else:
+            mdb.events.insert(events.copy())

@@ -87,14 +87,9 @@ Execution Options
     for this influx of vm creation. When creating large groups of VMs watch the
     cloud provider carefully.
 
-.. option:: -Q, --query
-
-    Execute a query and print out information about all cloud VMs. Can be used
-    in conjunction with -m to display only information about the specified map.
-
 .. option:: -u, --update-bootstrap
 
-    Update salt-bootstrap to the latest develop version on GitHub.
+    Update salt-bootstrap to the latest stable bootstrap release.
 
 .. option:: -y, --assume-yes
 

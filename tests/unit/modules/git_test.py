@@ -1,10 +1,15 @@
 # -*- coding: utf-8 -*-
 '''
-    :codeauthor: :email:`Jayesh Kariya <jayeshk@saltstack.com>`
+    :codeauthor: :email:`Erik Johnson <erik@saltstack.com>`
 '''
 
 # Import Python libs
 from __future__ import absolute_import
+import copy
+import logging
+import os
+import subprocess
+from distutils.version import LooseVersion
 
 # Import Salt Testing Libs
 from salttesting import TestCase, skipIf
@@ -16,11 +21,56 @@ from salttesting.mock import (
 )
 
 # Import Salt Libs
-from salt.modules import git
-from salt.exceptions import SaltInvocationError
+from salt.modules import git as git_mod  # Don't potentially shadow GitPython
 
 # Globals
-git.__salt__ = {}
+git_mod.__salt__ = {}
+git_mod.__context__ = {}
+log = logging.getLogger(__name__)
+
+WORKTREE_ROOT = '/tmp/salt-tests-tmpdir/main'
+WORKTREE_INFO = {
+    WORKTREE_ROOT: {
+        'HEAD': '119f025073875a938f2456f5ffd7d04e79e5a427',
+        'branch': 'refs/heads/master',
+        'stale': False,
+    },
+    '/tmp/salt-tests-tmpdir/worktree1': {
+        'HEAD': 'd8d19cf75d7cc3bdc598dc2d472881d26b51a6bf',
+        'branch': 'refs/heads/worktree1',
+        'stale': False,
+    },
+    '/tmp/salt-tests-tmpdir/worktree2': {
+        'HEAD': '56332ca504aa8b37bb62b54272d52b1d6d832629',
+        'branch': 'refs/heads/worktree2',
+        'stale': True,
+    },
+    '/tmp/salt-tests-tmpdir/worktree3': {
+        'HEAD': 'e148ea2d521313579f661373fbb93a48a5a6d40d',
+        'branch': 'detached',
+        'tags': ['v1.1'],
+        'stale': False,
+    },
+    '/tmp/salt-tests-tmpdir/worktree4': {
+        'HEAD': '6bbac64d3ad5582b3147088a708952df185db020',
+        'branch': 'detached',
+        'stale': True,
+    },
+}
+
+
+def _git_version():
+    git_version = subprocess.Popen(
+        ['git', '--version'],
+        shell=False,
+        close_fds=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE).communicate()[0]
+    if not git_version:
+        log.error('Git not installed')
+        return False
+    log.debug('Detected git version ' + git_version)
+    return LooseVersion(git_version.split()[-1])
 
 
 @skipIf(NO_MOCK, NO_MOCK_REASON)
@@ -28,326 +78,91 @@ class GitTestCase(TestCase):
     '''
     Test cases for salt.modules.git
     '''
-    # 'get_' function tests: 1
-
-    def test_current_branch(self):
+    def test_list_worktrees(self):
         '''
-        Test if it returns the current branch name
+        This tests git.list_worktrees
         '''
-        mock = MagicMock(return_value=True)
-        with patch.dict(git.__salt__, {'cmd.run_stdout': mock}):
-            self.assertTrue(git.current_branch('develop'))
+        def _build_worktree_output(path):
+            '''
+            Build 'git worktree list' output for a given path
+            '''
+            return 'worktree {0}\nHEAD {1}\n{2}\n'.format(
+                path,
+                WORKTREE_INFO[path]['HEAD'],
+                'branch {0}'.format(WORKTREE_INFO[path]['branch'])
+                    if WORKTREE_INFO[path]['branch'] != 'detached'
+                    else 'detached'
+            )
 
-    # 'revision' function tests: 1
+        # Build dict for _cmd_run_side_effect below. Start with the output from
+        # 'git worktree list'.
+        _cmd_run_values = {
+            'git worktree list --porcelain': '\n'.join(
+                [_build_worktree_output(x) for x in WORKTREE_INFO]
+            ),
+            'git --version': 'git version 2.7.0',
+        }
+        # Add 'git tag --points-at' output for detached HEAD worktrees with
+        # tags pointing at HEAD.
+        for path in WORKTREE_INFO:
+            if WORKTREE_INFO[path]['branch'] != 'detached':
+                continue
+            key = 'git tag --points-at ' + WORKTREE_INFO[path]['HEAD']
+            _cmd_run_values[key] = '\n'.join(
+                WORKTREE_INFO[path].get('tags', [])
+            )
 
-    def test_revision(self):
-        '''
-        Test if it returns the long hash of a given identifier
-        '''
-        mock = MagicMock(return_value={'retcode': 0, 'stdout': True})
-        with patch.dict(git.__salt__, {'cmd.run_all': mock,
-                                       'cmd.run_stdout': True}):
-            self.assertTrue(git.revision('develop'),)
+        def _cmd_run_side_effect(key, **kwargs):
+            # Not using dict.get() here because we want to know if
+            # _cmd_run_values doesn't account for all uses of cmd.run_all.
+            return {'stdout': _cmd_run_values[' '.join(key)],
+                    'stderr': '',
+                    'retcode': 0,
+                    'pid': 12345}
 
-    # 'clone' function tests: 1
+        def _isdir_side_effect(key):
+            # os.path.isdir() would return True on a non-stale worktree
+            return not WORKTREE_INFO[key].get('stale', False)
 
-    def test_clone(self):
-        '''
-        Test if it clone a new repository
-        '''
-        mock = MagicMock(return_value={'retcode': 0, 'stdout': True})
-        with patch.dict(git.__salt__, {'cmd.run_all': mock,
-                                       'cmd.run_stdout': True}):
-            self.assertTrue(git.clone('origin', 'develop'))
+        # Build return dict for comparison
+        worktree_ret = copy.deepcopy(WORKTREE_INFO)
+        for key in worktree_ret:
+            ptr = worktree_ret.get(key)
+            ptr['detached'] = ptr['branch'] == 'detached'
+            ptr['branch'] = None \
+                if ptr['detached'] \
+                else ptr['branch'].replace('refs/heads/', '', 1)
 
-    # 'describe' function tests: 1
-
-    def test_describe(self):
-        '''
-        Test if it returns the git describe string (or the SHA hash
-        if there are no tags) for the given revision
-        '''
-        mock = MagicMock(return_value=True)
-        with patch.dict(git.__salt__, {'cmd.run_stdout': mock}):
-            self.assertTrue(git.describe('develop'))
-
-    # 'archive' function tests: 1
-
-    def test_archive(self):
-        '''
-        Test if it exports a tarball from the repository
-        '''
-        mock = MagicMock(return_value={'retcode': 0, 'stdout': True})
-        mock_val = MagicMock(return_value='true')
-        with patch.dict(git.__salt__, {'cmd.run_all': mock,
-                                       'cmd.run_stdout': mock_val}):
-            self.assertTrue(git.archive('develop', 'archive.tar.gz'))
-
-    # 'fetch' function tests: 1
-
-    def test_fetch(self):
-        '''
-        Test if it perform a fetch on the given repository
-        '''
-        mock = MagicMock(return_value={'retcode': 0, 'stdout': True})
-        with patch.dict(git.__salt__, {'cmd.run_all': mock,
-                                       'cmd.run_stdout': True}):
-            self.assertTrue(git.fetch('develop'))
-
-    # 'pull' function tests: 1
-
-    def test_pull(self):
-        '''
-        Test if it perform a pull on the given repository
-        '''
-        mock = MagicMock(return_value={'retcode': 0, 'stdout': True})
-        with patch.dict(git.__salt__, {'cmd.run_all': mock,
-                                       'cmd.run_stdout': True}):
-            self.assertTrue(git.pull('develop'))
-
-    # 'rebase' function tests: 1
-
-    def test_rebase(self):
-        '''
-        Test if it rebase the current branch
-        '''
-        mock = MagicMock(return_value={'retcode': 0, 'stdout': True})
-        with patch.dict(git.__salt__, {'cmd.run_all': mock,
-                                       'cmd.run_stdout': True}):
-            self.assertEqual(git.rebase('develop'), True)
-
-    # 'checkout' function tests: 1
-
-    def test_checkout(self):
-        '''
-        Test if it checkout a given revision
-        '''
-        mock = MagicMock(return_value={'retcode': 0, 'stdout': True})
-        with patch.dict(git.__salt__, {'cmd.run_all': mock,
-                                       'cmd.run_stdout': True}):
-            self.assertTrue(git.checkout('develop', 'mybranch'))
-
-    # 'merge' function tests: 1
-
-    def test_merge(self):
-        '''
-        Test if it merge a given branch
-        '''
-        mock = MagicMock(return_value={'retcode': 0, 'stdout': True})
-        with patch.dict(git.__salt__, {'cmd.run_all': mock,
-                                       'cmd.run_stdout': True}):
-            self.assertTrue(git.merge('develop'))
-
-    # 'init' function tests: 1
-
-    def test_init(self):
-        '''
-        Test if it initialize a new git repository
-        '''
-        mock = MagicMock(return_value={'retcode': 0, 'stdout': True})
-        with patch.dict(git.__salt__, {'cmd.run_all': mock,
-                                       'cmd.run_stdout': True}):
-            self.assertTrue(git.init('develop'))
-
-    # 'submodule' function tests: 1
-
-    def test_submodule(self):
-        '''
-        Test if it initialize git submodules
-        '''
-        mock = MagicMock(return_value={'retcode': 0, 'stdout': True})
-        with patch.dict(git.__salt__, {'cmd.run_all': mock,
-                                       'cmd.run_stdout': True}):
-            self.assertTrue(git.submodule('develop'))
-
-    # 'status' function tests: 1
-
-    def test_status(self):
-        '''
-        Test if it return the status of the repository
-        '''
-        mock = MagicMock(return_value={'retcode': 0, 'stdout': ''})
-        with patch.dict(git.__salt__, {'cmd.run_all': mock,
-                                       'cmd.run_stdout': True}):
-            self.assertListEqual(git.status('develop'), [])
-
-    # 'add' function tests: 1
-
-    def test_add(self):
-        '''
-        Test if it add a file to git
-        '''
-        mock = MagicMock(return_value={'retcode': 0, 'stdout': True})
-        with patch.dict(git.__salt__, {'cmd.run_all': mock,
-                                       'cmd.run_stdout': True}):
-            self.assertTrue(git.add('develop',
-                                    '/salt/tests/unit/modules/example.py'))
-
-    # 'rm' function tests: 1
-
-    def test_rm(self):
-        '''
-        Test if it remove a file to git
-        '''
-        mock = MagicMock(return_value={'retcode': 0, 'stdout': True})
-        with patch.dict(git.__salt__, {'cmd.run_all': mock,
-                                       'cmd.run_stdout': True}):
-            self.assertTrue(git.rm('develop',
-                                   '/salt/tests/unit/modules/example.py'))
-
-    # 'commit' function tests: 1
-
-    def test_commit(self):
-        '''
-        Test if it create a commit
-        '''
-        mock = MagicMock(return_value={'retcode': 0, 'stdout': True})
-        with patch.dict(git.__salt__, {'cmd.run_all': mock,
-                                       'cmd.run_stdout': True}):
-            self.assertTrue(git.commit('develop', 'The comit message'))
-
-    # 'push' function tests: 1
-
-    def test_push(self):
-        '''
-        Test if it Push to remote
-        '''
-        mock = MagicMock(return_value={'retcode': 0, 'stdout': True})
-        with patch.dict(git.__salt__, {'cmd.run_all': mock,
-                                       'cmd.run_stdout': True}):
-            self.assertTrue(git.push('develop', 'remote-name'))
-
-    # 'remotes' function tests: 1
-
-    def test_remotes(self):
-        '''
-        Test if it gets remotes like git remote -v
-        '''
-        mock = MagicMock(return_value={'retcode': 0, 'stdout': ''})
-        with patch.dict(git.__salt__, {'cmd.run_all': mock,
-                                       'cmd.run_stdout': True}):
-            self.assertDictEqual(git.remotes('develop'), {})
-
-    # 'remote_get' function tests: 1
-
-    def test_remote_get(self):
-        '''
-        Test if it get the fetch and push URL for a specified remote name
-        '''
-        mock = MagicMock(return_value={'retcode': 0,
-                                       'stdout': '\nSalt\nStack'})
-        with patch.dict(git.__salt__, {'cmd.run_all': mock,
-                                       'cmd.run_stdout': True}):
-            self.assertEqual(git.remote_get('develop'), ('Salt', 'Stack'))
-
-        mock = MagicMock(return_value={'retcode': 0,
-                                       'stdout': '\norigin\norigin'})
-        with patch.dict(git.__salt__, {'cmd.run_all': mock,
-                                       'cmd.run_stdout': True}):
-            self.assertEqual(git.remote_get('develop'), None)
-
-        mock = MagicMock(return_value={'retcode': 1,
-                                       'stdout': '\norigin\norigin',
-                                       'stderr': 'error'})
-        with patch.dict(git.__salt__, {'cmd.run_all': mock,
-                                       'cmd.run_stdout': True}):
-            self.assertEqual(git.remote_get('develop'), None)
-
-    # 'remote_set' function tests: 1
-
-    def test_remote_set(self):
-        '''
-        Test if it sets a remote with name and URL like git remote add name url
-        '''
-        mock = MagicMock(return_value={'retcode': 0,
-                                       'stdout': '\nSalt\nStack'})
-        with patch.dict(git.__salt__, {'cmd.run_all': mock,
-                                       'cmd.run_stdout': True}):
-            self.assertEqual(git.remote_set('develop'), ('Salt', 'Stack'))
-
-    # 'branch' function tests: 1
-
-    def test_branch(self):
-        '''
-        Test if it interacts with branches
-        '''
-        mock_all = MagicMock(return_value={'retcode': 0, 'stdout': ''})
-        mock_stdout = MagicMock(return_value=True)
-        with patch.dict(git.__salt__, {'cmd.run_all': mock_all,
-                                       'cmd.run_stdout': mock_stdout}):
-            self.assertEqual(git.branch('develop', 'origin/develop'), True)
-
-    # 'reset' function tests: 1
-
-    def test_reset(self):
-        '''
-        Test if it reset the repository checkout
-        '''
-        mock = MagicMock(return_value={'retcode': 0, 'stdout': True})
-        with patch.dict(git.__salt__, {'cmd.run_all': mock,
-                                       'cmd.run_stdout': True}):
-            self.assertEqual(git.reset('develop'), True)
-
-    # 'stash' function tests: 1
-
-    def test_stash(self):
-        '''
-        Test if stash changes in the repository checkout
-        '''
-        mock = MagicMock(return_value={'retcode': 0, 'stdout': True})
-        with patch.dict(git.__salt__, {'cmd.run_all': mock,
-                                       'cmd.run_stdout': True}):
-            self.assertEqual(git.stash('develop'), True)
-
-    # 'config_set' function tests: 1
-
-    def test_config_set(self):
-        '''
-        Test if it sets a key in the git configuration file
-        '''
-        mock = MagicMock(return_value={'retcode': 0, 'stdout': True})
-        with patch.dict(git.__salt__, {'cmd.run_all': mock,
-                                       'cmd.run_stdout': True}):
-            self.assertRaises(TypeError, git.config_set)
-
-        mock = MagicMock(return_value={'retcode': 0, 'stdout': True})
-        with patch.dict(git.__salt__, {'cmd.run_all': mock,
-                                       'cmd.run_stdout': True}):
-            self.assertRaises(SaltInvocationError, git.config_set,
-                              None, 'myname', 'me@example.com')
-
-        mock = MagicMock(return_value={'retcode': 0, 'stdout': True})
-        with patch.dict(git.__salt__, {'cmd.run_all': mock,
-                                       'cmd.run_stdout': True}):
-            self.assertEqual(git.config_set(None, 'myname', 'me@example.com',
-                                            'me', True), True)
-
-    # 'config_get' function tests: 1
-
-    def test_config_get(self):
-        '''
-        Test if it gets a key or keys from the git configuration file
-        '''
-        mock = MagicMock(return_value={'retcode': 0, 'stdout': True})
-        with patch.dict(git.__salt__, {'cmd.run_all': mock,
-                                       'cmd.run_stdout': True}):
-            self.assertRaises(TypeError, git.config_get)
-
-        mock = MagicMock(return_value={'retcode': 0, 'stdout': True})
-        with patch.dict(git.__salt__, {'cmd.run_all': mock,
-                                       'cmd.run_stdout': True}):
-            self.assertEqual(git.config_get(None, 'myname', 'me'), True)
-
-    # 'ls_remote' function tests: 1
-
-    def test_ls_remote(self):
-        '''
-        Test if it returns the upstream hash for any given URL and branch.
-        '''
-        mock = MagicMock(return_value={'retcode': 0, 'stdout': True})
-        with patch.dict(git.__salt__, {'cmd.run_all': mock,
-                                       'cmd.run_stdout': True}):
-            self.assertEqual(git.ls_remote('develop'), True)
+        cmd_run_mock = MagicMock(side_effect=_cmd_run_side_effect)
+        isdir_mock = MagicMock(side_effect=_isdir_side_effect)
+        with patch.dict(git_mod.__salt__, {'cmd.run_all': cmd_run_mock}):
+            with patch.object(os.path, 'isdir', isdir_mock):
+                # Test all=True. Include all return data.
+                self.maxDiff = None
+                self.assertEqual(
+                    git_mod.list_worktrees(
+                        WORKTREE_ROOT, all=True, stale=False
+                    ),
+                    worktree_ret
+                )
+                # Test all=False and stale=False. Exclude stale worktrees from
+                # return data.
+                self.assertEqual(
+                    git_mod.list_worktrees(
+                        WORKTREE_ROOT, all=False, stale=False
+                    ),
+                    dict([(x, worktree_ret[x]) for x in WORKTREE_INFO
+                          if not WORKTREE_INFO[x].get('stale', False)])
+                )
+                # Test stale=True. Exclude non-stale worktrees from return
+                # data.
+                self.assertEqual(
+                    git_mod.list_worktrees(
+                        WORKTREE_ROOT, all=False, stale=True
+                    ),
+                    dict([(x, worktree_ret[x]) for x in WORKTREE_INFO
+                          if WORKTREE_INFO[x].get('stale', False)])
+                )
 
 
 if __name__ == '__main__':

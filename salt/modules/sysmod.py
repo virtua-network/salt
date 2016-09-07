@@ -10,10 +10,12 @@ import logging
 
 # Import salt libs
 import salt.loader
-import salt.utils
-import salt.state
 import salt.runner
+import salt.state
+import salt.utils
+import salt.utils.schema as S
 from salt.utils.doc import strip_rst as _strip_rst
+from salt.ext.six.moves import zip
 
 # Import 3rd-party libs
 import salt.ext.six as six
@@ -23,7 +25,7 @@ log = logging.getLogger(__name__)
 # Define the module's virtual name
 __virtualname__ = 'sys'
 
-__proxyenabled__ = '*'
+__proxyenabled__ = ['*']
 
 
 def __virtual__():
@@ -54,7 +56,7 @@ def doc(*args):
 
     Modules can be specified as globs.
 
-    .. versionadded:: 2015.2.0
+    .. versionadded:: 2015.5.0
 
     .. code-block:: bash
 
@@ -79,9 +81,9 @@ def doc(*args):
         else:
             target_mod = ''
         if _use_fnmatch:
-            for fun in fnmatch.filter(__salt__.keys(), target_mod):  # pylint: disable=incompatible-py3-code
-                docs[fun] = __salt__[fun].__doc__                    # There's no problem feeding fnmatch.filter()
-        else:                                                        # with a Py3's dict_keys() instance
+            for fun in fnmatch.filter(__salt__, target_mod):
+                docs[fun] = __salt__[fun].__doc__
+        else:
 
             for fun in __salt__:
                 if fun == module or fun.startswith(target_mod):
@@ -112,7 +114,7 @@ def state_doc(*args):
 
     State names can be specified as globs.
 
-    .. versionadded:: 2015.2.0
+    .. versionadded:: 2015.5.0
 
     .. code-block:: bash
 
@@ -182,7 +184,7 @@ def runner_doc(*args):
 
     Runner names can be specified as globs.
 
-    .. versionadded:: 2015.2.0
+    .. versionadded:: 2015.5.0
 
     .. code-block:: bash
 
@@ -240,7 +242,7 @@ def returner_doc(*args):
 
     Returner names can be specified as globs.
 
-    .. versionadded:: 2015.2.0
+    .. versionadded:: 2015.5.0
 
     .. code-block:: bash
 
@@ -287,7 +289,7 @@ def renderer_doc(*args):
 
     Multiple renderers can be specified.
 
-    .. versionadded:: 2015.2.0
+    .. versionadded:: 2015.5.0
 
     CLI Example:
 
@@ -307,18 +309,19 @@ def renderer_doc(*args):
     renderers_ = salt.loader.render(__opts__, [])
     docs = {}
     if not args:
-        for fun in six.iterkeys(renderers_):
-            docs[fun] = renderers_[fun].__doc__
+        for func in six.iterkeys(renderers_):
+            docs[func] = renderers_[func].__doc__
         return _strip_rst(docs)
 
     for module in args:
-        if '*' in module:
-            for fun in fnmatch.filter(renderers_.keys(), module):   # pylint: disable=incompatible-py3-code
-                docs[fun] = renderers_[fun].__doc__                 # There's no problem feeding fnmatch.filter()
-                                                                    # with a Py3's dict_keys() instance
+        if '*' in module or '.' in module:
+            for func in fnmatch.filter(renderers_, module):
+                docs[func] = renderers_[func].__doc__
         else:
-            for fun in six.iterkeys(renderers_):
-                docs[fun] = renderers_[fun].__doc__
+            moduledot = module + '.'
+            for func in six.iterkeys(renderers_):
+                if func.startswith(moduledot):
+                    docs[func] = renderers_[func].__doc__
     return _strip_rst(docs)
 
 
@@ -337,11 +340,17 @@ def list_functions(*args, **kwargs):  # pylint: disable=unused-argument
 
     Function names can be specified as globs.
 
-    .. versionadded:: 2015.2.0
+    .. versionadded:: 2015.5.0
 
     .. code-block:: bash
 
         salt '*' sys.list_functions 'sys.list_*'
+
+    .. versionadded:: ?
+
+    .. code-block:: bash
+
+        salt '*' sys.list_functions 'module.specific_function'
 
     '''
     # ## NOTE: **kwargs is used here to prevent a traceback when garbage
@@ -353,20 +362,14 @@ def list_functions(*args, **kwargs):  # pylint: disable=unused-argument
 
     names = set()
     for module in args:
-        _use_fnmatch = False
-        if '*' in module:
-            target_mod = module
-            _use_fnmatch = True
-        elif module:
-            # allow both "sys" and "sys." to match sys, without also matching
-            # sysctl
-            module = module + '.' if not module.endswith('.') else module
-        if _use_fnmatch:
-            for func in fnmatch.filter(__salt__, target_mod):
+        if '*' in module or '.' in module:
+            for func in fnmatch.filter(__salt__, module):
                 names.add(func)
         else:
+            # "sys" should just match sys without also matching sysctl
+            moduledot = module + '.'
             for func in __salt__:
-                if func.startswith(module):
+                if func.startswith(moduledot):
                     names.add(func)
     return sorted(names)
 
@@ -375,7 +378,7 @@ def list_modules(*args):
     '''
     List the modules loaded on the minion
 
-    .. versionadded:: 2015.2.0
+    .. versionadded:: 2015.5.0
 
     CLI Example:
 
@@ -393,18 +396,18 @@ def list_modules(*args):
     modules = set()
     if not args:
         for func in __salt__:
-            comps = func.split('.')
-            if len(comps) < 2:
-                continue
-            modules.add(comps[0])
+            modules.add(func.split('.')[0])
         return sorted(modules)
 
     for module in args:
-        for func in fnmatch.filter(__salt__, module):
-            comps = func.split('.')
-            if len(comps) < 2:
-                continue
-            modules.add(comps[0])
+        if '*' in module:
+            for func in fnmatch.filter(__salt__, module):
+                modules.add(func.split('.')[0])
+        else:
+            for func in __salt__:
+                mod_test = func.split('.')[0]
+                if mod_test == module:
+                    modules.add(mod_test)
     return sorted(modules)
 
 
@@ -438,7 +441,7 @@ def argspec(module=''):
 
     Module names can be specified as globs.
 
-    .. versionadded:: 2015.2.0
+    .. versionadded:: 2015.5.0
 
     .. code-block:: bash
 
@@ -453,7 +456,7 @@ def state_argspec(module=''):
     Return the argument specification of functions in Salt state
     modules.
 
-    .. versionadded:: 2015.2.0
+    .. versionadded:: 2015.5.0
 
     CLI Example:
 
@@ -479,7 +482,7 @@ def returner_argspec(module=''):
     Return the argument specification of functions in Salt returner
     modules.
 
-    .. versionadded:: 2015.2.0
+    .. versionadded:: 2015.5.0
 
     CLI Example:
 
@@ -505,7 +508,7 @@ def runner_argspec(module=''):
     Return the argument specification of functions in Salt runner
     modules.
 
-    .. versionadded:: 2015.2.0
+    .. versionadded:: 2015.5.0
 
     CLI Example:
 
@@ -542,12 +545,18 @@ def list_state_functions(*args, **kwargs):  # pylint: disable=unused-argument
 
     State function names can be specified as globs.
 
-    .. versionadded:: 2015.2.0
+    .. versionadded:: 2015.5.0
 
     .. code-block:: bash
 
         salt '*' sys.list_state_functions 'file.*'
         salt '*' sys.list_state_functions 'file.s*'
+
+    .. versionadded:: ?
+
+    .. code-block:: bash
+
+        salt '*' sys.list_state_functions 'module.specific_function'
 
     '''
     # NOTE: **kwargs is used here to prevent a traceback when garbage
@@ -560,20 +569,14 @@ def list_state_functions(*args, **kwargs):  # pylint: disable=unused-argument
 
     names = set()
     for module in args:
-        _use_fnmatch = False
-        if '*' in module:
-            target_mod = module
-            _use_fnmatch = True
-        elif module:
-            # allow both "sys" and "sys." to match sys, without also matching
-            # sysctl
-            module = module + '.' if not module.endswith('.') else module
-        if _use_fnmatch:
-            for func in fnmatch.filter(st_.states, target_mod):
+        if '*' in module or '.' in module:
+            for func in fnmatch.filter(st_.states, module):
                 names.add(func)
         else:
+            # "sys" should just match sys without also matching sysctl
+            moduledot = module + '.'
             for func in st_.states:
-                if func.startswith(module):
+                if func.startswith(moduledot):
                     names.add(func)
     return sorted(names)
 
@@ -592,7 +595,7 @@ def list_state_modules(*args):
 
     State module names can be specified as globs.
 
-    .. versionadded:: 2015.2.0
+    .. versionadded:: 2015.5.0
 
     .. code-block:: bash
 
@@ -605,18 +608,18 @@ def list_state_modules(*args):
     if not args:
         for func in st_.states:
             log.debug('func {0}'.format(func))
-            comps = func.split('.')
-            if len(comps) < 2:
-                continue
-            modules.add(comps[0])
+            modules.add(func.split('.')[0])
         return sorted(modules)
 
     for module in args:
-        for func in fnmatch.filter(st_.states, module):
-            comps = func.split('.')
-            if len(comps) < 2:
-                continue
-            modules.add(comps[0])
+        if '*' in module:
+            for func in fnmatch.filter(st_.states, module):
+                modules.add(func.split('.')[0])
+        else:
+            for func in st_.states:
+                mod_test = func.split('.')[0]
+                if mod_test == module:
+                    modules.add(mod_test)
     return sorted(modules)
 
 
@@ -634,7 +637,7 @@ def list_runners(*args):
 
     Runner names can be specified as globs.
 
-    .. versionadded:: 2015.2.0
+    .. versionadded:: 2015.5.0
 
     .. code-block:: bash
 
@@ -645,18 +648,18 @@ def list_runners(*args):
     runners = set()
     if not args:
         for func in run_.functions:
-            comps = func.split('.')
-            if len(comps) < 2:
-                continue
-            runners.add(comps[0])
+            runners.add(func.split('.')[0])
         return sorted(runners)
 
     for module in args:
-        for func in fnmatch.filter(run_.functions, module):
-            comps = func.split('.')
-            if len(comps) < 2:
-                continue
-            runners.add(comps[0])
+        if '*' in module:
+            for func in fnmatch.filter(run_.functions, module):
+                runners.add(func.split('.')[0])
+        else:
+            for func in run_.functions:
+                mod_test = func.split('.')[0]
+                if mod_test == module:
+                    runners.add(mod_test)
     return sorted(runners)
 
 
@@ -677,7 +680,7 @@ def list_runner_functions(*args, **kwargs):  # pylint: disable=unused-argument
 
     Runner function names can be specified as globs.
 
-    .. versionadded:: 2015.2.0
+    .. versionadded:: 2015.5.0
 
     .. code-block:: bash
 
@@ -694,27 +697,21 @@ def list_runner_functions(*args, **kwargs):  # pylint: disable=unused-argument
 
     names = set()
     for module in args:
-        _use_fnmatch = False
-        if '*' in module:
-            target_mod = module
-            _use_fnmatch = True
-        elif module:
-            # allow both "sys" and "sys." to match sys, without also matching
-            # sysctl
-            module = module + '.' if not module.endswith('.') else module
-        if _use_fnmatch:
-            for func in fnmatch.filter(run_.functions, target_mod):
+        if '*' in module or '.' in module:
+            for func in fnmatch.filter(run_.functions, module):
                 names.add(func)
         else:
+            # "sys" should just match sys without also matching sysctl
+            moduledot = module + '.'
             for func in run_.functions:
-                if func.startswith(module):
+                if func.startswith(moduledot):
                     names.add(func)
     return sorted(names)
 
 
 def list_returners(*args):
     '''
-    List the runners loaded on the minion
+    List the returners loaded on the minion
 
     .. versionadded:: 2014.7.0
 
@@ -726,7 +723,7 @@ def list_returners(*args):
 
     Returner names can be specified as globs.
 
-    .. versionadded:: 2015.2.0
+    .. versionadded:: 2015.5.0
 
     .. code-block:: bash
 
@@ -738,18 +735,18 @@ def list_returners(*args):
 
     if not args:
         for func in six.iterkeys(returners_):
-            comps = func.split('.')
-            if len(comps) < 2:
-                continue
-            returners.add(comps[0])
+            returners.add(func.split('.')[0])
         return sorted(returners)
 
     for module in args:
-        for func in fnmatch.filter(returners_.keys(), module):  # pylint: disable=incompatible-py3-code
-            comps = func.split('.')                             # There's no problem feeding fnmatch.filter()
-            if len(comps) < 2:                                  # with a Py3's dict_keys() instance
-                continue
-            returners.add(comps[0])
+        if '*' in module:
+            for func in fnmatch.filter(returners_, module):
+                returners.add(func.split('.')[0])
+        else:
+            for func in returners_:
+                mod_test = func.split('.')[0]
+                if mod_test == module:
+                    returners.add(mod_test)
     return sorted(returners)
 
 
@@ -770,7 +767,7 @@ def list_returner_functions(*args, **kwargs):  # pylint: disable=unused-argument
 
     Returner names can be specified as globs.
 
-    .. versionadded:: 2015.2.0
+    .. versionadded:: 2015.5.0
 
     .. code-block:: bash
 
@@ -787,21 +784,14 @@ def list_returner_functions(*args, **kwargs):  # pylint: disable=unused-argument
 
     names = set()
     for module in args:
-        _use_fnmatch = False
-        if '*' in module:
-            target_mod = module
-            _use_fnmatch = True
-        elif module:
-            # allow both "sys" and "sys." to match sys, without also matching
-            # sysctl
-            module = module + '.' if not module.endswith('.') else module
-        if _use_fnmatch:
-            for func in returners_:
-                if func.startswith(module):
-                    names.add(func)
+        if '*' in module or '.' in module:
+            for func in fnmatch.filter(returners_, module):
+                names.add(func)
         else:
-            for func in six.iterkeys(returners_):
-                if func.startswith(module):
+            # "sys" should just match sys without also matching sysctl
+            moduledot = module + '.'
+            for func in returners_:
+                if func.startswith(moduledot):
                     names.add(func)
     return sorted(names)
 
@@ -810,7 +800,7 @@ def list_renderers(*args):
     '''
     List the renderers loaded on the minion
 
-    .. versionadded:: 2015.2.0
+    .. versionadded:: 2015.5.0
 
     CLI Example:
 
@@ -825,15 +815,74 @@ def list_renderers(*args):
         salt '*' sys.list_renderers 'yaml*'
 
     '''
-    ren_ = salt.loader.render(__opts__, [])
-    ren = set()
+    renderers_ = salt.loader.render(__opts__, [])
+    renderers = set()
 
     if not args:
-        for func in six.iterkeys(ren_):
-            ren.add(func)
-        return sorted(ren)
+        for rend in six.iterkeys(renderers_):
+            renderers.add(rend)
+        return sorted(renderers)
 
     for module in args:
-        for func in fnmatch.filter(ren_, module):
-            ren.add(func)
-    return sorted(ren)
+        for rend in fnmatch.filter(renderers_, module):
+            renderers.add(rend)
+    return sorted(renderers)
+
+
+def _argspec_to_schema(mod, spec):
+    args = spec['args']
+    defaults = spec['defaults'] or []
+
+    args_req = args[:len(args) - len(defaults)]
+    args_defaults = list(zip(args[-len(defaults):], defaults))
+
+    types = {
+        'title': mod,
+        'description': mod,
+    }
+
+    for i in args_req:
+        types[i] = S.OneOfItem(items=(
+            S.BooleanItem(title=i, description=i, required=True),
+            S.IntegerItem(title=i, description=i, required=True),
+            S.NumberItem(title=i, description=i, required=True),
+            S.StringItem(title=i, description=i, required=True),
+
+            # S.ArrayItem(title=i, description=i, required=True),
+            # S.DictItem(title=i, description=i, required=True),
+        ))
+
+    for i, j in args_defaults:
+        types[i] = S.OneOfItem(items=(
+            S.BooleanItem(title=i, description=i, default=j),
+            S.IntegerItem(title=i, description=i, default=j),
+            S.NumberItem(title=i, description=i, default=j),
+            S.StringItem(title=i, description=i, default=j),
+
+            # S.ArrayItem(title=i, description=i, default=j),
+            # S.DictItem(title=i, description=i, default=j),
+        ))
+
+    return type(mod, (S.Schema,), types).serialize()
+
+
+def state_schema(module=''):
+    '''
+    Return a JSON Schema for the given state function(s)
+
+    .. versionadded:: 2016.3.0
+
+    CLI Example:
+
+    .. code-block:: bash
+
+        salt '*' sys.state_schema
+        salt '*' sys.state_schema pkg.installed
+    '''
+    specs = state_argspec(module)
+
+    schemas = []
+    for state_mod, state_spec in specs.items():
+        schemas.append(_argspec_to_schema(state_mod, state_spec))
+
+    return schemas

@@ -12,6 +12,7 @@ import random
 import logging
 import itertools
 from collections import deque
+from _socket import gaierror
 
 # Import salt libs
 import salt.daemons.masterapi
@@ -26,13 +27,14 @@ from raet.lane.stacking import LaneStack
 
 from salt import daemons
 from salt.daemons import salting
-from salt.utils import kinds
+from salt.exceptions import SaltException
+from salt.utils import kinds, is_windows
 from salt.utils.event import tagify
 
 # Import ioflo libs
-from ioflo.base.odicting import odict
-import ioflo.base.deeding
 
+from ioflo.aid.odicting import odict  # pylint: disable=E0611,F0401
+import ioflo.base.deeding
 from ioflo.base.consoling import getConsole
 console = getConsole()
 
@@ -40,7 +42,7 @@ console = getConsole()
 # pylint: disable=import-error
 HAS_PSUTIL = False
 try:
-    import psutil
+    import salt.utils.psutil_compat as psutil
     HAS_PSUTIL = True
 except ImportError:
     pass
@@ -76,7 +78,7 @@ class SaltRaetCleanup(ioflo.base.deeding.Deed):
         '''
         Should only run once to cleanup stale lane uxd files.
         '''
-        if self.opts.value.get('sock_dir'):
+        if not is_windows() and self.opts.value.get('sock_dir'):
             sockdirpath = os.path.abspath(self.opts.value['sock_dir'])
             console.concise("Cleaning up uxd files in {0}\n".format(sockdirpath))
             protecteds = self.opts.value.get('raet_cleanup_protecteds', [])
@@ -238,7 +240,8 @@ class SaltRaetRoadStackSetup(ioflo.base.deeding.Deed):
                                'uid': None,
                                'role': 'master',
                                'sighex': None,
-                               'prihex': None}},
+                               'prihex': None,
+                               'bufcnt': 2}},
             }
 
     def _prepare(self):
@@ -292,6 +295,8 @@ class SaltRaetRoadStackSetup(ioflo.base.deeding.Deed):
         sighex = roledata['sighex'] or self.local.data.sighex
         prihex = roledata['prihex'] or self.local.data.prihex
 
+        bufcnt = self.opts.value.get('raet_road_bufcnt', self.local.data.bufcnt)
+
         self.stack.value = RoadStack(store=self.store,
                                      keep=keep,
                                      name=name,
@@ -306,7 +311,8 @@ class SaltRaetRoadStackSetup(ioflo.base.deeding.Deed):
                                      txMsgs=txMsgs,
                                      rxMsgs=rxMsgs,
                                      period=3.0,
-                                     offset=0.5)
+                                     offset=0.5,
+                                     bufcnt=bufcnt)
 
         if self.opts.value.get('raet_clear_remotes'):
             for remote in list(self.stack.value.remotes.values()):
@@ -376,13 +382,21 @@ class SaltRaetRoadStackJoiner(ioflo.base.deeding.Deed):
             if refresh_all or refresh_masters:
                 stack.puid = stack.Uid  # reset puid so reuse same uid each time
 
+                ex = SaltException('Unable to connect to any master')
                 for master in self.ushers.value:
-                    mha = master['external']
-                    stack.addRemote(RemoteEstate(stack=stack,
-                                                 fuid=0,  # vacuous join
-                                                 sid=0,  # always 0 for join
-                                                 ha=mha,
-                                                 kind=kinds.applKinds.master))
+                    try:
+                        mha = master['external']
+                        stack.addRemote(RemoteEstate(stack=stack,
+                                                     fuid=0,  # vacuous join
+                                                     sid=0,  # always 0 for join
+                                                     ha=mha,
+                                                     kind=kinds.applKinds.master))
+                    except gaierror as ex:
+                        log.warning("Unable to connect to master {0}: {1}".format(mha, ex))
+                        if self.opts.value.get('master_type') != 'failover':
+                            raise ex
+                if not stack.remotes:
+                    raise ex
 
             for remote in list(stack.remotes.values()):
                 if remote.kind == kinds.applKinds.master:
@@ -622,7 +636,8 @@ class SaltLoadModules(ioflo.base.deeding.Deed):
                'modules': '.salt.loader.modules',
                'grain_time': '.salt.var.grain_time',
                'module_refresh': '.salt.var.module_refresh',
-               'returners': '.salt.loader.returners'}
+               'returners': '.salt.loader.returners',
+               'module_executors': '.salt.loader.executors'}
 
     def _prepare(self):
         self._load_modules()
@@ -648,7 +663,7 @@ class SaltLoadModules(ioflo.base.deeding.Deed):
                     )
             modules_max_memory = True
             old_mem_limit = resource.getrlimit(resource.RLIMIT_AS)
-            rss, vms = psutil.Process(os.getpid()).get_memory_info()
+            rss, vms = psutil.Process(os.getpid()).memory_info()
             mem_limit = rss + vms + self.opts.value['modules_max_memory']
             resource.setrlimit(resource.RLIMIT_AS, (mem_limit, mem_limit))
         elif self.opts.value.get('modules_max_memory', -1) > 0:
@@ -664,10 +679,12 @@ class SaltLoadModules(ioflo.base.deeding.Deed):
         self.utils.value = salt.loader.utils(self.opts.value)
         self.modules.value = salt.loader.minion_mods(self.opts.value, utils=self.utils.value)
         self.returners.value = salt.loader.returners(self.opts.value, self.modules.value)
+        self.module_executors.value = salt.loader.executors(self.opts.value, self.modules.value)
 
         self.utils.value.clear()
         self.modules.value.clear()
         self.returners.value.clear()
+        self.module_executors.value.clear()
 
         # we're done, reset the limits!
         if modules_max_memory is True:
@@ -789,7 +806,8 @@ class SaltRaetManorLaneSetup(ioflo.base.deeding.Deed):
                'inode': '.salt.lane.manor.',
                'stack': 'stack',
                'local': {'ipath': 'local',
-                          'ival': {'lanename': 'master'}},
+                          'ival': {'lanename': 'master',
+                                   'bufcnt': 100}},
             }
 
     def _prepare(self):
@@ -824,11 +842,14 @@ class SaltRaetManorLaneSetup(ioflo.base.deeding.Deed):
             log.error(emsg + '\n')
             raise ValueError(emsg)
 
+        bufcnt = self.opts.value.get('raet_lane_bufcnt', self.local.data.bufcnt)
+
         name = 'manor'
         self.stack.value = LaneStack(
                                     name=name,
                                     lanename=lanename,
-                                    sockdirpath=self.opts.value['sock_dir'])
+                                    sockdirpath=self.opts.value['sock_dir'],
+                                    bufcnt=bufcnt)
         self.stack.value.Pk = raeting.PackKind.pack.value
         self.event_yards.value = set()
         self.local_cmd.value = deque()
@@ -1723,7 +1744,7 @@ class SaltRaetMasterEvents(ioflo.base.deeding.Deed):
                'road_stack': '.salt.road.manor.stack',
                'master_events': '.salt.var.master_events'}
 
-    def postinitio(self):
+    def _prepare(self):
         self.master_events.value = deque()
 
     def action(self):

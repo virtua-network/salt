@@ -80,7 +80,7 @@ def ipcidr(tgt):
         return False
 
 
-def pillar_pcre(tgt, delimiter=DEFAULT_TARGET_DELIM, delim=None):
+def pillar_pcre(tgt, delimiter=DEFAULT_TARGET_DELIM):
     '''
     Return True if the minion matches the given pillar_pcre target. The
     ``delimiter`` argument can be used to specify a different delimiter.
@@ -101,17 +101,8 @@ def pillar_pcre(tgt, delimiter=DEFAULT_TARGET_DELIM, delim=None):
         Specify an alternate delimiter to use when traversing a nested dict
 
         .. versionadded:: 0.16.4
-        .. deprecated:: 2014.7.0
+        .. deprecated:: 2015.8.0
     '''
-    if delim is not None:
-        salt.utils.warn_until(
-            'Beryllium',
-            'The \'delim\' argument to match.pillar_pcre has been deprecated '
-            'and will be removed in a future release. Please use '
-            '\'delimiter\' instead.'
-        )
-        delimiter = delim
-
     matcher = salt.minion.Matcher({'pillar': __pillar__}, __salt__)
     try:
         return matcher.pillar_pcre_match(tgt, delimiter=delimiter)
@@ -120,7 +111,7 @@ def pillar_pcre(tgt, delimiter=DEFAULT_TARGET_DELIM, delim=None):
         return False
 
 
-def pillar(tgt, delimiter=DEFAULT_TARGET_DELIM, delim=None):
+def pillar(tgt, delimiter=DEFAULT_TARGET_DELIM):
     '''
     Return True if the minion matches the given pillar target. The
     ``delimiter`` argument can be used to specify a different delimiter.
@@ -141,17 +132,8 @@ def pillar(tgt, delimiter=DEFAULT_TARGET_DELIM, delim=None):
         Specify an alternate delimiter to use when traversing a nested dict
 
         .. versionadded:: 0.16.4
-        .. deprecated:: 2014.7.0
+        .. deprecated:: 2015.8.0
     '''
-    if delim is not None:
-        salt.utils.warn_until(
-            'Beryllium',
-            'The \'delim\' argument to match.pillar has been deprecated and '
-            'will be removed in a future release. Please use \'delimiter\' '
-            'instead.'
-        )
-        delimiter = delim
-
     matcher = salt.minion.Matcher({'pillar': __pillar__}, __salt__)
     try:
         return matcher.pillar_match(tgt, delimiter=delimiter)
@@ -178,7 +160,7 @@ def data(tgt):
         return False
 
 
-def grain_pcre(tgt, delimiter=DEFAULT_TARGET_DELIM, delim=None):
+def grain_pcre(tgt, delimiter=DEFAULT_TARGET_DELIM):
     '''
     Return True if the minion matches the given grain_pcre target. The
     ``delimiter`` argument can be used to specify a different delimiter.
@@ -199,17 +181,8 @@ def grain_pcre(tgt, delimiter=DEFAULT_TARGET_DELIM, delim=None):
         Specify an alternate delimiter to use when traversing a nested dict
 
         .. versionadded:: 0.16.4
-        .. deprecated:: 2014.7.0
+        .. deprecated:: 2015.8.0
     '''
-    if delim is not None:
-        salt.utils.warn_until(
-            'Beryllium',
-            'The \'delim\' argument to match.grain_pcre has been deprecated '
-            'and will be removed in a future release. Please use '
-            '\'delimiter\' instead.'
-        )
-        delimiter = delim
-
     matcher = salt.minion.Matcher({'grains': __grains__}, __salt__)
     try:
         return matcher.grain_pcre_match(tgt, delimiter=delimiter)
@@ -218,7 +191,7 @@ def grain_pcre(tgt, delimiter=DEFAULT_TARGET_DELIM, delim=None):
         return False
 
 
-def grain(tgt, delimiter=DEFAULT_TARGET_DELIM, delim=None):
+def grain(tgt, delimiter=DEFAULT_TARGET_DELIM):
     '''
     Return True if the minion matches the given grain target. The ``delimiter``
     argument can be used to specify a different delimiter.
@@ -239,17 +212,8 @@ def grain(tgt, delimiter=DEFAULT_TARGET_DELIM, delim=None):
         Specify an alternate delimiter to use when traversing a nested dict
 
         .. versionadded:: 0.16.4
-        .. deprecated:: 2014.7.0
+        .. deprecated:: 2015.8.0
     '''
-    if delim is not None:
-        salt.utils.warn_until(
-            'Beryllium',
-            'The \'delim\' argument to match.grain has been deprecated and '
-            'will be removed in a future release. Please use \'delimiter\' '
-            'instead.'
-        )
-        delimiter = delim
-
     matcher = salt.minion.Matcher({'grains': __grains__}, __salt__)
     try:
         return matcher.grain_match(tgt, delimiter=delimiter)
@@ -358,18 +322,21 @@ def filter_by(lookup, expr_form='compound', minion_id=None):
 
     .. code-block:: yaml
 
+        # Filter the data for the current minion into a variable:
         {% set roles = salt['match.filter_by']({
             'web*': ['app', 'caching'],
             'db*': ['db'],
         }) %}
+
+        # Make the filtered data available to Pillar:
+        roles: {{ roles | yaml() }}
     '''
     expr_funcs = dict(inspect.getmembers(sys.modules[__name__],
         predicate=inspect.isfunction))
 
     for key in lookup:
-        if minion_id and expr_funcs[expr_form](key, minion_id):
-            return lookup[key]
-        elif expr_funcs[expr_form](key, minion_id):
+        params = (key, minion_id) if minion_id else (key, )
+        if expr_funcs[expr_form](*params):
             return lookup[key]
 
     return None

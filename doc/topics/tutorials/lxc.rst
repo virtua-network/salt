@@ -9,13 +9,6 @@ LXC Management with Salt
     This walkthrough assumes basic knowledge of Salt. To get up to speed, check
     out the :doc:`Salt Walkthrough </topics/tutorials/walkthrough>`.
 
-.. warning::
-
-    Some features are only currently available in the ``develop`` branch, and
-    are new in the upcoming 2015.2.0 release. These new features will be
-    clearly labeled.
-    
-
 Dependencies
 ============
 
@@ -48,8 +41,10 @@ order. This allows for profiles to be defined centrally in the master config
 file, with several options for overriding them (if necessary) on groups of
 minions or individual minions.
 
-There are two types of profiles, one for defining the parameters used in
-container creation, and one for defining the container's network interface(s).
+There are two types of profiles:
+
+    - One for defining the parameters used in container creation/clone.
+    - One for defining the container's network interface(s) settings.
 
 .. _tutorial-lxc-profiles-container:
 
@@ -102,7 +97,7 @@ Consider the following container profile data:
         size: 20G
 
 Any minion with the above Pillar data would have the **size** parameter in the
-**centos** profile overriden to 20G, while those minions without the above
+**centos** profile overridden to 20G, while those minions without the above
 Pillar data would have the 10G **size** value. This is another way of achieving
 the same result as the **centos_big** profile above, without having to define
 another whole profile that differs in just one value.
@@ -110,19 +105,19 @@ another whole profile that differs in just one value.
 .. note::
 
     In the 2014.7.x release cycle and earlier, container profiles are defined
-    under ``lxc.profile``. This parameter will still work in version 2015.2.0,
+    under ``lxc.profile``. This parameter will still work in version 2015.5.0,
     but is deprecated and will be removed in a future release. Please note
     however that the profile merging feature described above will only work
     with profiles defined under ``lxc.container_profile``, and only in versions
-    2015.2.0 and later.
+    2015.5.0 and later.
 
-Additionally, in version 2015.2.0 container profiles have been expanded to
+Additionally, in version 2015.5.0 container profiles have been expanded to
 support passing template-specific CLI options to :mod:`lxc.create
 <salt.modules.lxc.create>`. Below is a table describing the parameters which
 can be configured in container profiles:
 
 ================== ================== ====================
-Parameter          2015.2.0 and Newer 2014.7.x and Earlier
+Parameter          2015.5.0 and Newer 2014.7.x and Earlier
 ================== ================== ====================
 *template*:sup:`1` Yes                Yes
 *options*:sup:`1`  Yes                No
@@ -143,9 +138,15 @@ Parameter          2015.2.0 and Newer 2014.7.x and Earlier
 
 Network Profiles
 ----------------
-
 LXC network profiles are defined defined underneath the ``lxc.network_profile``
-config option:
+config option.
+By default, the module uses a DHCP based configuration and try to guess a bridge to
+get connectivity.
+
+
+.. warning::
+
+   on pre **2015.5.2**, you need to specify explicitly the network bridge
 
 .. code-block:: yaml
 
@@ -193,11 +194,11 @@ profile, while those minions without the above Pillar data would use the
 .. note::
 
     In the 2014.7.x release cycle and earlier, network profiles are defined
-    under ``lxc.nic``. This parameter will still work in version 2015.2.0, but
+    under ``lxc.nic``. This parameter will still work in version 2015.5.0, but
     is deprecated and will be removed in a future release. Please note however
     that the profile merging feature described above will only work with
     profiles defined under ``lxc.network_profile``, and only in versions
-    2015.2.0 and later.
+    2015.5.0 and later.
 
 The following are parameters which can be configured in network profiles. These
 will directly correspond to a parameter in an LXC configuration file (see ``man
@@ -218,7 +219,7 @@ container-by-container basis, for instance using the ``nic_opts`` argument to
 .. warning::
 
     The ``ipv4``, ``ipv6``, ``gateway``, and ``link`` (bridge) settings in
-    network profiles / nic_opts will only work if the container doesnt redefine
+    network profiles / nic_opts will only work if the container doesn't redefine
     the network configuration (for example in
     ``/etc/sysconfig/network-scripts/ifcfg-<interface_name>`` on RHEL/CentOS,
     or ``/etc/network/interfaces`` on Debian/Ubuntu/etc.). Use these with
@@ -226,6 +227,52 @@ container-by-container basis, for instance using the ``nic_opts`` argument to
     for instance, typically are configured for eth0 to use DHCP, which will
     conflict with static IP addresses set at the container level.
 
+.. note::
+
+    For LXC < 1.0.7 and DHCP support, set ``ipv4.gateway: 'auto'`` is your
+    network profile, ie.::
+
+        lxc.network_profile.nic:
+          debian:
+            eth0:
+              link: lxcbr0
+              ipv4.gateway: 'auto'
+
+
+Old lxc support (<1.0.7)
+------------------------
+
+With saltstack **2015.5.2** and above, normally the setting is autoselected, but
+before, you'll need to teach your network profile to set
+**lxc.network.ipv4.gateway** to **auto** when using a classic ipv4 configuration.
+
+Thus you'll need
+
+.. code-block:: yaml
+
+      lxc.network_profile.foo:
+        etho:
+          link: lxcbr0
+          ipv4.gateway: auto
+
+Tricky network setups Examples
+------------------------------
+This example covers how to make a container with both an internal ip and a
+public routable ip, wired on two veth pairs.
+
+The another interface which receives directly a public routable ip can't be on
+the first interface that we reserve for private inter LXC networking.
+
+.. code-block:: yaml
+
+    lxc.network_profile.foo:
+      eth0: {gateway: null, bridge: lxcbr0}
+      eth1:
+        # replace that by your main interface
+        'link': 'br0'
+        'mac': '00:16:5b:01:24:e1'
+        'gateway': '2.20.9.14'
+        'ipv4': '2.20.9.1'
 
 Creating a Container on the CLI
 ===============================
@@ -263,7 +310,7 @@ container, with three values:
 3. **arch** - CPU architecture (i.e. ``amd64`` or ``i386``)
 
 The :mod:`lxc.images <salt.modules.lxc.images>` function (new in version
-2015.2.0) can be used to list the available images. Alternatively, the releases
+2015.5.0) can be used to list the available images. Alternatively, the releases
 can be viewed on http://images.linuxcontainers.org/images/. The images are
 organized in such a way that the **dist**, **release**, and **arch** can be
 determined using the following URL format:
@@ -407,11 +454,11 @@ Running Commands Within a Container
 For containers which are not running their own Minion, commands can be run
 within the container in a manner similar to using (:mod:`cmd.run
 <salt.modules.cmdmod.run`). The means of doing this have been changed
-significantly in version 2015.2.0 (though the deprecated behavior will still be
+significantly in version 2015.5.0 (though the deprecated behavior will still be
 supported for a few releases). Both the old and new usage are documented
 below.
 
-2015.2.0 and Newer
+2015.5.0 and Newer
 ------------------
 
 New functions have been added to mimic the behavior of the functions in the
@@ -464,10 +511,17 @@ To run a command and return all information:
     salt myminion lxc.run_cmd web1 'tail /var/log/messages' stdout=True stderr=True
 
 
+Container Management Using salt-cloud
+=====================================
+
+Salt cloud uses under the hood the salt runner and module to manage containers,
+Please look at :ref:`this chapter <config_lxc>`
+
+
 Container Management Using States
 =================================
 
-Several states are being renamed or otherwise modified in version 2015.2.0. The
+Several states are being renamed or otherwise modified in version 2015.5.0. The
 information in this tutorial refers to the new states. For
 2014.7.x and earlier, please refer to the :mod:`documentation for the LXC
 states <salt.states.lxc>`.

@@ -8,7 +8,7 @@ from __future__ import absolute_import
 
 # Import salt libs
 import salt.utils
-import salt.utils.cloud
+import salt.utils.locales
 import salt.ext.six
 
 # Import third party libs
@@ -43,7 +43,7 @@ def _get_journal():
     return __context__['systemd.journald']
 
 
-def validate(config):
+def __validate__(config):
     '''
     Validate the beacon configuration
     '''
@@ -53,15 +53,14 @@ def validate(config):
     else:
         for item in config:
             if not isinstance(config[item], dict):
-                log.info('Configuration for journald beacon must '
-                         'be a dictionary of dictionaries.')
-                return False
-    return True
+                return False, ('Configuration for journald beacon must '
+                               'be a dictionary of dictionaries.')
+    return True, 'Valid beacon configuration'
 
 
 def beacon(config):
     '''
-    The journald beacon allows for the systemd jornal to be parsed and linked
+    The journald beacon allows for the systemd journal to be parsed and linked
     objects to be turned into events.
 
     This beacons config will return all sshd jornal entries
@@ -69,10 +68,10 @@ def beacon(config):
     .. code-block:: yaml
 
         beacons:
-            journald:
-                sshd:
-                    SYSLOG_IDENTIFIER: sshd
-                    PRIORITY: 6
+          journald:
+            sshd:
+              SYSLOG_IDENTIFIER: sshd
+              PRIORITY: 6
     '''
     ret = []
     journal = _get_journal()
@@ -84,11 +83,13 @@ def beacon(config):
             n_flag = 0
             for key in config[name]:
                 if isinstance(key, salt.ext.six.string_types):
-                    key = salt.utils.sdecode(key)
+                    key = salt.utils.locales.sdecode(key)
                 if key in cur:
                     if config[name][key] == cur[key]:
                         n_flag += 1
             if n_flag == len(config[name]):
                 # Match!
-                ret.append(salt.utils.cloud.simple_types_filter(cur))
+                sub = salt.utils.simple_types_filter(cur)
+                sub.update({'tag': name})
+                ret.append(sub)
     return ret

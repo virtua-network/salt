@@ -14,10 +14,23 @@ More information about Azure is located at `http://www.windowsazure.com/
 
 Dependencies
 ============
-* The `Azure <https://pypi.python.org/pypi/azure>`_ Python SDK.
+* `Microsoft Azure SDK for Python <https://pypi.python.org/pypi/azure/1.0.2>`_ >= 1.0.2
+* The python-requests library, for Python < 2.7.9.
 * A Microsoft Azure account
 * OpenSSL (to generate the certificates)
 * `Salt <https://github.com/saltstack/salt>`_
+
+
+.. note::
+
+    The Azure driver is currently being updated to work with the new version of
+    the Python Azure SDK, 1.0.0. However until that process is complete, this
+    driver will not work with Azure 1.0.0. Please be sure you're running on a
+    minimum version of 0.10.2 and less than version 1.0.0.
+
+    See `Issue #27980`_ for more information.
+
+.. _Issue #27980: https://github.com/saltstack/salt/issues/27980
 
 
 Configuration
@@ -30,7 +43,7 @@ Set up the provider config at ``/etc/salt/cloud.providers.d/azure.conf``:
     # Note: This example is for /etc/salt/cloud.providers.d/azure.conf
 
     my-azure-config:
-      provider: azure
+      driver: azure
       subscription_id: 3287abc8-f98a-c678-3bde-326766fd3617
       certificate_path: /etc/salt/azure.pem
 
@@ -64,6 +77,14 @@ tab within the "Settings" section of the management portal.
 
 Optionally, a ``management_host`` may be configured, if necessary for the region.
 
+.. note::
+    .. versionchanged:: 2015.8.0
+
+    The ``provider`` parameter in cloud provider definitions was renamed to ``driver``. This
+    change was made to avoid confusion with the ``provider`` parameter that is used in cloud profile
+    definitions. Cloud provider definitions now use ``driver`` to refer to the Salt cloud module that
+    provides the underlying functionality to connect to a cloud host, while cloud profiles continue
+    to use ``provider`` to refer to provider configurations that you define.
 
 Cloud Profiles
 ==============
@@ -80,6 +101,8 @@ Set up an initial profile at ``/etc/salt/cloud.profiles``:
       ssh_password: verybadpass
       slot: production
       media_link: 'http://portalvhdabcdefghijklmn.blob.core.windows.net/vhds'
+      virtual_network_name: azure-virtual-network
+      subnet_name: azure-subnet
 
 These options are described in more detail below. Once configured, the profile
 can be realized with a salt command:
@@ -174,6 +197,16 @@ service_name
 The name of the service in which to create the VM. If this is not specified,
 then a service will be created with the same name as the VM.
 
+virtual_network_name
+------------
+Optional. The name of the virtual network for the VM to join. If this is not
+specified, then no virtual network will be joined.
+
+subnet_name
+------------
+Optional. The name of the subnet in the virtual network for the VM to join.
+Requires that a ``virtual_network_name`` is specified.
+
 
 Show Instance
 =============
@@ -195,7 +228,7 @@ behavior when a VM is destroyed.
 
 cleanup_disks
 -------------
-.. versionadded:: Beryllium
+.. versionadded:: 2015.8.0
 
 Default is ``False``. When set to ``True``, Salt Cloud will wait for the VM to
 be destroyed, then attempt to destroy the main disk that is associated with the
@@ -203,7 +236,7 @@ VM.
 
 cleanup_vhds
 ------------
-.. versionadded:: Beryllium
+.. versionadded:: 2015.8.0
 
 Default is ``False``. Requires ``cleanup_disks`` to be set to ``True``. When
 also set to ``True``, Salt Cloud will ask Azure to delete the VHD associated
@@ -211,7 +244,7 @@ with the disk that is also destroyed.
 
 cleanup_services
 ----------------
-.. versionadded:: Beryllium
+.. versionadded:: 2015.8.0
 
 Default is ``False``. Requires ``cleanup_disks`` to be set to ``True``. When
 also set to ``True``, Salt Cloud will wait for the disk to be destroyed, then
@@ -221,7 +254,7 @@ belongs to the service, the disk must be destroyed before the service can be.
 
 Managing Hosted Services
 ========================
-.. versionadded:: Beryllium
+.. versionadded:: 2015.8.0
 
 An account can have one or more hosted services. A hosted service is required
 in order to create a VM. However, as mentioned above, if a hosted service is not
@@ -301,7 +334,7 @@ Delete a specific hosted service.
 
 Managing Storage Accounts
 =========================
-.. versionadded:: Beryllium
+.. versionadded:: 2015.8.0
 
 Salt Cloud can manage storage accounts associated with the account. The
 following functions are available. Deprecated marked as deprecated are marked
@@ -421,7 +454,7 @@ to be specified.
 
 Managing Disks
 ==============
-.. versionadded:: Beryllium
+.. versionadded:: 2015.8.0
 
 When a VM is created, a disk will also be created for it. The following
 functions are available for managing disks. Deprecated marked as deprecated are
@@ -492,7 +525,7 @@ Delete a specific disk.
 
 Managing Service Certificates
 =============================
-.. versionadded:: Beryllium
+.. versionadded:: 2015.8.0
 
 Stored at the cloud service level, these certificates are used by your deployed
 services. For more information on service certificates, see the following link:
@@ -570,7 +603,7 @@ and ``thumbalgorithm`` can be obtained from ``list_service_certificates``.
 
 Managing Management Certificates
 ================================
-.. versionadded:: Beryllium
+.. versionadded:: 2015.8.0
 
 A Azure management certificate is an X.509 v3 certificate used to authenticate
 an agent, such as Visual Studio Tools for Windows Azure or a client application
@@ -652,7 +685,7 @@ obtained from ``list_management_certificates``.
 
 Virtual Network Management
 ==========================
-.. versionadded:: Beryllium
+.. versionadded:: 2015.8.0
 
 The following are functions for managing virtual networks.
 
@@ -667,7 +700,7 @@ List input endpoints associated with the deployment.
 
 Managing Input Endpoints
 ========================
-.. versionadded:: Beryllium
+.. versionadded:: 2015.8.0
 
 Input endpoints are used to manage port access for roles. Because endpoints
 cannot be managed by the Azure Python SDK, Salt Cloud uses the API directly.
@@ -814,7 +847,7 @@ endpoint is set to. For instance, port 22 would be called SSH.
 
 Managing Affinity Groups
 ========================
-.. versionadded:: Beryllium
+.. versionadded:: 2015.8.0
 
 Affinity groups allow you to group your Azure services to optimize performance.
 All services and VMs within an affinity group will be located in the same
@@ -887,7 +920,7 @@ Delete a specific affinity group associated with the account
 
 Managing Blob Storage
 =====================
-.. versionadded:: Beryllium
+.. versionadded:: 2015.8.0
 
 Azure storage containers and their contents can be managed with Salt Cloud. This
 is not as elegant as using one of the other available clients in Windows, but it
@@ -1433,7 +1466,7 @@ Required if the blob has an active lease.
 progress_callback
 `````````````````
 callback for progress with signature function(current, total) where
-current is the number of bytes transfered so far, and total is the
+current is the number of bytes transferred so far, and total is the
 size of the blob.
 
 max_connections

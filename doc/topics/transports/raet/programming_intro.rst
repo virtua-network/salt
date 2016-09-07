@@ -1,3 +1,5 @@
+.. _raet-programming:
+
 =========================
 Intro to RAET Programming
 =========================

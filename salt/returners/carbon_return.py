@@ -23,6 +23,17 @@ the pickle protocol, set ``carbon.mode`` to ``pickle``:
 
     carbon.mode: pickle
 
+You can also specify the pattern used for the metric base path (except for virt modules metrics):
+    carbon.metric_base_pattern: carbon.[minion_id].[module].[function]
+
+These tokens can used :
+    [module]: salt module
+    [function]: salt function
+    [minion_id]: minion id
+
+Default is :
+    carbon.metric_base_pattern: [module].[function].[minion_id]
+
 Carbon settings may also be configured as:
 
 .. code-block:: yaml
@@ -32,6 +43,7 @@ Carbon settings may also be configured as:
       port: <carbon port>
       skip_on_error: True
       mode: (pickle|text)
+      metric_base_pattern: <pattern> | [module].[function].[minion_id]
 
 Alternative configuration values can be used by prefacing the configuration.
 Any values not found in the alternative configuration will be pulled from
@@ -53,11 +65,20 @@ To use the carbon returner, append '--return carbon' to the salt command.
 
 To use the alternative configuration, append '--return_config alternative' to the salt command.
 
-.. versionadded:: 2015.2.0
+.. versionadded:: 2015.5.0
 
 .. code-block:: bash
 
     salt '*' test.ping --return carbon --return_config alternative
+
+To override individual configuration items, append --return_kwargs '{"key:": "value"}' to the salt command.
+
+.. versionadded:: 2016.3.0
+
+.. code-block:: bash
+
+    salt '*' test.ping --return carbon --return_kwargs '{"skip_on_error": False}'
+
 '''
 
 # Import python libs
@@ -208,8 +229,8 @@ def _send(saltdata, metric_base, opts):
     host = opts.get('host')
     port = opts.get('port')
     skip = opts.get('skip')
-    if 'mode' in opts:
-        mode = opts.get('mode').lower()
+    metric_base_pattern = opts.get('carbon.metric_base_pattern')
+    mode = opts.get('mode').lower() if 'mode' in opts else 'text'
 
     log.debug('Carbon minion configured with host: {0}:{1}'.format(host, port))
     log.debug('Using carbon protocol: {0}'.format(mode))

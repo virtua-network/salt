@@ -13,7 +13,7 @@ ensure_in_syspath('../..')
 import salt.state
 from salt.config import minion_config
 from salt.template import compile_template_str
-from salt.utils.serializers import yamlex
+from salt.serializers import yamlex
 
 basic_template = '''#!yamlex
 foo: bar
@@ -37,7 +37,9 @@ class RendererMixin(object):
         _state = salt.state.State(_config)
         return compile_template_str(template,
                                     _state.rend,
-                                    _state.opts['renderer'])
+                                    _state.opts['renderer'],
+                                    _state.opts['renderer_blacklist'],
+                                    _state.opts['renderer_whitelist'])
 
 
 class RendererTests(TestCase, RendererMixin):

@@ -11,30 +11,28 @@ from __future__ import absolute_import
 import logging
 import msgpack
 import socket
-import sys
 import os
-import urlparse  # TODO: remove
-
+import weakref
+import time
+import traceback
+import errno
 
 # Import Salt Libs
 import salt.crypt
 import salt.utils
 import salt.utils.verify
 import salt.utils.event
+import salt.utils.async
 import salt.payload
 import salt.exceptions
+import salt.transport.frame
+import salt.transport.ipc
 import salt.transport.client
 import salt.transport.server
 import salt.transport.mixins.auth
+import salt.ext.six as six
 from salt.exceptions import SaltReqTimeoutError, SaltClientError
-
-# for IPC (for now)
-import zmq
-import zmq.eventloop.ioloop
-# support pyzmq 13.0.x, TODO: remove once we force people to 14.0.x
-if not hasattr(zmq.eventloop.ioloop, 'ZMQIOLoop'):
-    zmq.eventloop.ioloop.ZMQIOLoop = zmq.eventloop.ioloop.IOLoop
-import zmq.eventloop.zmqstream
+from salt.transport import iter_transport_opts
 
 # Import Tornado Libs
 import tornado
@@ -42,70 +40,212 @@ import tornado.tcpserver
 import tornado.gen
 import tornado.concurrent
 import tornado.tcpclient
+import tornado.netutil
+
+# pylint: disable=import-error,no-name-in-module
+if six.PY2:
+    import urlparse
+else:
+    import urllib.parse as urlparse
+# pylint: enable=import-error,no-name-in-module
+
+# Import third party libs
+from Crypto.Cipher import PKCS1_OAEP
+
+if six.PY3 and salt.utils.is_windows():
+    USE_LOAD_BALANCER = True
+else:
+    USE_LOAD_BALANCER = False
+
+if USE_LOAD_BALANCER:
+    import threading
+    import multiprocessing
+    import errno
+    import tornado.util
+    from salt.utils.process import SignalHandlingMultiprocessingProcess
 
 log = logging.getLogger(__name__)
 
 
-def frame_msg(body, header=None, raw_body=False):
+def _set_tcp_keepalive(sock, opts):
     '''
-    Frame the given message with our wire protocol
+    Ensure that TCP keepalives are set for the socket.
     '''
-    framed_msg = {}
-    if header is None:
-        header = {}
-
-    # if the body wasn't already msgpacked-- lets do that.
-    if not raw_body:
-        body = msgpack.dumps(body)
-
-    framed_msg['head'] = header
-    framed_msg['body'] = body
-    framed_msg_packed = msgpack.dumps(framed_msg)
-    return '{0} {1}'.format(len(framed_msg_packed), framed_msg_packed)
-
-
-def socket_frame_recv(s, recv_size=4096):
-    '''
-    Retrieve a frame from socket
-    '''
-    # get the header size
-    recv_buf = ''
-    while ' ' not in recv_buf:
-        data = s.recv(recv_size)
-        if data == '':
-            raise socket.error('Empty response!')
+    if hasattr(socket, 'SO_KEEPALIVE'):
+        if opts.get('tcp_keepalive', False):
+            sock.setsockopt(socket.SOL_SOCKET, socket.SO_KEEPALIVE, 1)
+            if hasattr(socket, 'SOL_TCP'):
+                if hasattr(socket, 'TCP_KEEPIDLE'):
+                    tcp_keepalive_idle = opts.get('tcp_keepalive_idle', -1)
+                    if tcp_keepalive_idle > 0:
+                        sock.setsockopt(
+                            socket.SOL_TCP, socket.TCP_KEEPIDLE,
+                            int(tcp_keepalive_idle))
+                if hasattr(socket, 'TCP_KEEPCNT'):
+                    tcp_keepalive_cnt = opts.get('tcp_keepalive_cnt', -1)
+                    if tcp_keepalive_cnt > 0:
+                        sock.setsockopt(
+                            socket.SOL_TCP, socket.TCP_KEEPCNT,
+                            int(tcp_keepalive_cnt))
+                if hasattr(socket, 'TCP_KEEPINTVL'):
+                    tcp_keepalive_intvl = opts.get('tcp_keepalive_intvl', -1)
+                    if tcp_keepalive_intvl > 0:
+                        sock.setsockopt(
+                            socket.SOL_TCP, socket.TCP_KEEPINTVL,
+                            int(tcp_keepalive_intvl))
+            if hasattr(socket, 'SIO_KEEPALIVE_VALS'):
+                # Windows doesn't support TCP_KEEPIDLE, TCP_KEEPCNT, nor
+                # TCP_KEEPINTVL. Instead, it has its own proprietary
+                # SIO_KEEPALIVE_VALS.
+                tcp_keepalive_idle = opts.get('tcp_keepalive_idle', -1)
+                tcp_keepalive_intvl = opts.get('tcp_keepalive_intvl', -1)
+                # Windows doesn't support changing something equivalent to
+                # TCP_KEEPCNT.
+                if tcp_keepalive_idle > 0 or tcp_keepalive_intvl > 0:
+                    # Windows defaults may be found by using the link below.
+                    # Search for 'KeepAliveTime' and 'KeepAliveInterval'.
+                    # https://technet.microsoft.com/en-us/library/bb726981.aspx#EDAA
+                    # If one value is set and the other isn't, we still need
+                    # to send both values to SIO_KEEPALIVE_VALS and they both
+                    # need to be valid. So in that case, use the Windows
+                    # default.
+                    if tcp_keepalive_idle <= 0:
+                        tcp_keepalive_idle = 7200
+                    if tcp_keepalive_intvl <= 0:
+                        tcp_keepalive_intvl = 1
+                    # The values expected are in milliseconds, so multiply by
+                    # 1000.
+                    sock.ioctl(socket.SIO_KEEPALIVE_VALS, (
+                        1, int(tcp_keepalive_idle * 1000),
+                        int(tcp_keepalive_intvl * 1000)))
         else:
-            recv_buf += data
-    # once we have a space, we know how long the rest is
-    header_len, buf = recv_buf.split(' ', 1)
-    header_len = int(header_len)
-    while len(buf) < header_len:
-        data = s.recv(recv_size)
-        if data == '':
-            raise socket.error('msg stopped, we are missing some data!')
-        else:
-            buf += data
-
-    header = msgpack.loads(buf[:header_len])
-    msg_len = int(header['msgLen'])
-    buf = buf[header_len:]
-    while len(buf) < msg_len:
-        data = s.recv(recv_size)
-        if data == '':
-            raise socket.error('msg stopped, we are missing some data!')
-        else:
-            buf += data
-
-    return buf
+            sock.setsockopt(socket.SOL_SOCKET, socket.SO_KEEPALIVE, 0)
 
 
-# TODO: make singleton
+if USE_LOAD_BALANCER:
+    class LoadBalancerServer(SignalHandlingMultiprocessingProcess):
+        '''
+        Raw TCP server which runs in its own process and will listen
+        for incoming connections. Each incoming connection will be
+        sent via multiprocessing queue to the workers.
+        Since the queue is shared amongst workers, only one worker will
+        handle a given connection.
+        '''
+        # TODO: opts!
+        # Based on default used in tornado.netutil.bind_sockets()
+        backlog = 128
+
+        def __init__(self, opts, socket_queue, log_queue=None):
+            super(LoadBalancerServer, self).__init__(log_queue=log_queue)
+            self.opts = opts
+            self.socket_queue = socket_queue
+            self._socket = None
+
+        # __setstate__ and __getstate__ are only used on Windows.
+        # We do this so that __init__ will be invoked on Windows in the child
+        # process so that a register_after_fork() equivalent will work on
+        # Windows.
+        def __setstate__(self, state):
+            self._is_child = True
+            self.__init__(
+                state['opts'],
+                state['socket_queue'],
+                log_queue=state['log_queue']
+            )
+
+        def __getstate__(self):
+            return {'opts': self.opts,
+                    'socket_queue': self.socket_queue,
+                    'log_queue': self.log_queue}
+
+        def close(self):
+            if self._socket is not None:
+                self._socket.shutdown(socket.SHUT_RDWR)
+                self._socket.close()
+                self._socket = None
+
+        def __del__(self):
+            self.close()
+
+        def run(self):
+            '''
+            Start the load balancer
+            '''
+            self._socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            self._socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+            _set_tcp_keepalive(self._socket, self.opts)
+            self._socket.setblocking(1)
+            self._socket.bind((self.opts['interface'], int(self.opts['ret_port'])))
+            self._socket.listen(self.backlog)
+
+            while True:
+                try:
+                    # Wait for a connection to occur since the socket is
+                    # blocking.
+                    connection, address = self._socket.accept()
+                    # Wait for a free slot to be available to put
+                    # the connection into.
+                    # Sockets are picklable on Windows in Python 3.
+                    self.socket_queue.put((connection, address), True, None)
+                except socket.error as e:
+                    # ECONNABORTED indicates that there was a connection
+                    # but it was closed while still in the accept queue.
+                    # (observed on FreeBSD).
+                    if tornado.util.errno_from_exception(e) == errno.ECONNABORTED:
+                        continue
+                    raise
+
+
 # TODO: move serial down into message library
 class AsyncTCPReqChannel(salt.transport.client.ReqChannel):
     '''
     Encapsulate sending routines to tcp.
+
+    Note: this class returns a singleton
     '''
+    # This class is only a singleton per minion/master pair
+    # mapping of io_loop -> {key -> channel}
+    instance_map = weakref.WeakKeyDictionary()
+
+    def __new__(cls, opts, **kwargs):
+        '''
+        Only create one instance of channel per __key()
+        '''
+        # do we have any mapping for this io_loop
+        io_loop = kwargs.get('io_loop') or tornado.ioloop.IOLoop.current()
+        if io_loop not in cls.instance_map:
+            cls.instance_map[io_loop] = weakref.WeakValueDictionary()
+        loop_instance_map = cls.instance_map[io_loop]
+
+        key = cls.__key(opts, **kwargs)
+        if key not in loop_instance_map:
+            log.debug('Initializing new AsyncTCPReqChannel for {0}'.format(key))
+            # we need to make a local variable for this, as we are going to store
+            # it in a WeakValueDictionary-- which will remove the item if no one
+            # references it-- this forces a reference while we return to the caller
+            new_obj = object.__new__(cls)
+            new_obj.__singleton_init__(opts, **kwargs)
+            loop_instance_map[key] = new_obj
+        else:
+            log.debug('Re-using AsyncTCPReqChannel for {0}'.format(key))
+        return loop_instance_map[key]
+
+    @classmethod
+    def __key(cls, opts, **kwargs):
+        if 'master_uri' in kwargs:
+            opts['master_uri'] = kwargs['master_uri']
+        return (opts['pki_dir'],     # where the keys are stored
+                opts['id'],          # minion ID
+                opts['master_uri'],
+                kwargs.get('crypt', 'aes'),  # TODO: use the same channel for crypt
+                )
+
+    # has to remain empty for singletons, since __init__ will *always* be called
     def __init__(self, opts, **kwargs):
+        pass
+
+    # an init for the singleton instance to call
+    def __singleton_init__(self, opts, **kwargs):
         self.opts = dict(opts)
 
         self.serial = salt.payload.Serial(self.opts)
@@ -118,14 +258,24 @@ class AsyncTCPReqChannel(salt.transport.client.ReqChannel):
         if self.crypt != 'clear':
             self.auth = salt.crypt.AsyncAuth(self.opts, io_loop=self.io_loop)
 
+        resolver = kwargs.get('resolver')
+
         parse = urlparse.urlparse(self.opts['master_uri'])
         host, port = parse.netloc.rsplit(':', 1)
         self.master_addr = (host, int(port))
+        self._closing = False
+        self.message_client = SaltMessageClient(
+            self.opts, host, int(port), io_loop=self.io_loop,
+            resolver=resolver)
 
-        self.message_client = SaltMessageClient(host, int(port), io_loop=self.io_loop)
+    def close(self):
+        if self._closing:
+            return
+        self._closing = True
+        self.message_client.close()
 
     def __del__(self):
-        self.message_client.destroy()
+        self.close()
 
     def _package_load(self, load):
         return {
@@ -137,12 +287,15 @@ class AsyncTCPReqChannel(salt.transport.client.ReqChannel):
     def crypted_transfer_decode_dictentry(self, load, dictkey=None, tries=3, timeout=60):
         if not self.auth.authenticated:
             yield self.auth.authenticate()
-        self._package_load(self.auth.crypticle.dumps(load))
         ret = yield self.message_client.send(self._package_load(self.auth.crypticle.dumps(load)), timeout=timeout)
         key = self.auth.get_keys()
-        aes = key.private_decrypt(ret['key'], 4)
+        cipher = PKCS1_OAEP.new(key)
+        aes = cipher.decrypt(ret['key'])
         pcrypt = salt.crypt.Crypticle(self.opts, aes)
-        raise tornado.gen.Return(pcrypt.loads(ret[dictkey]))
+        data = pcrypt.loads(ret[dictkey])
+        if six.PY3:
+            data = salt.transport.frame.decode_embedded_strs(data)
+        raise tornado.gen.Return(data)
 
     @tornado.gen.coroutine
     def _crypted_transfer(self, load, tries=3, timeout=60):
@@ -163,6 +316,8 @@ class AsyncTCPReqChannel(salt.transport.client.ReqChannel):
             # upload the results to the master
             if data:
                 data = self.auth.crypticle.loads(data)
+                if six.PY3:
+                    data = salt.transport.frame.decode_embedded_strs(data)
             raise tornado.gen.Return(data)
 
         if not self.auth.authenticated:
@@ -181,14 +336,19 @@ class AsyncTCPReqChannel(salt.transport.client.ReqChannel):
         raise tornado.gen.Return(ret)
 
     @tornado.gen.coroutine
-    def send(self, load, tries=3, timeout=60):
+    def send(self, load, tries=3, timeout=60, raw=False):
         '''
         Send a request, return a future which will complete when we send the message
         '''
-        if self.crypt == 'clear':
-            ret = yield self._uncrypted_transfer(load, tries=tries, timeout=timeout)
-        else:
-            ret = yield self._crypted_transfer(load, tries=tries, timeout=timeout)
+        try:
+            if self.crypt == 'clear':
+                ret = yield self._uncrypted_transfer(load, tries=tries, timeout=timeout)
+            else:
+                ret = yield self._crypted_transfer(load, tries=tries, timeout=timeout)
+        except tornado.iostream.StreamClosedError:
+            # Convert to 'SaltClientError' so that clients can handle this
+            # exception more appropriately.
+            raise SaltClientError('Connection to master lost')
         raise tornado.gen.Return(ret)
 
 
@@ -200,29 +360,145 @@ class AsyncTCPPubChannel(salt.transport.mixins.auth.AESPubClientMixin, salt.tran
 
         self.serial = salt.payload.Serial(self.opts)
 
-        self.io_loop = kwargs['io_loop'] or tornado.ioloop.IOLoop.current()
+        self.crypt = kwargs.get('crypt', 'aes')
+        self.io_loop = kwargs.get('io_loop') or tornado.ioloop.IOLoop.current()
         self.connected = False
+        self._closing = False
+        self._reconnected = False
+        self.event = salt.utils.event.get_event(
+            'minion',
+            opts=self.opts,
+            listen=False
+        )
+
+    def close(self):
+        if self._closing:
+            return
+        self._closing = True
+        if hasattr(self, 'message_client'):
+            self.message_client.close()
 
     def __del__(self):
-        if hasattr(self, 'message_client'):
-            self.message_client.destroy()
+        self.close()
+
+    def _package_load(self, load):
+        return {
+            'enc': self.crypt,
+            'load': load,
+        }
+
+    @tornado.gen.coroutine
+    def send_id(self, tok, force_auth):
+        '''
+        Send the minion id to the master so that the master may better
+        track the connection state of the minion.
+        In case of authentication errors, try to renegotiate authentication
+        and retry the method.
+        '''
+        load = {'id': self.opts['id'], 'tok': tok}
+
+        @tornado.gen.coroutine
+        def _do_transfer():
+            msg = self._package_load(self.auth.crypticle.dumps(load))
+            package = salt.transport.frame.frame_msg(msg, header=None)
+            yield self.message_client._stream.write(package)
+            raise tornado.gen.Return(True)
+
+        if force_auth or not self.auth.authenticated:
+            yield self.auth.authenticate()
+        try:
+            ret = yield _do_transfer()
+            raise tornado.gen.Return(ret)
+        except salt.crypt.AuthenticationError:
+            yield self.auth.authenticate()
+            ret = yield _do_transfer()
+            raise tornado.gen.Return(ret)
+
+    @tornado.gen.coroutine
+    def connect_callback(self, result):
+        if self._closing:
+            return
+        # Force re-auth on reconnect since the master
+        # may have been restarted
+        yield self.send_id(self.tok, self._reconnected)
+        self.connected = True
+        self.event.fire_event(
+            {'master': self.opts['master']},
+            '__master_connected'
+        )
+        if self._reconnected:
+            # On reconnects, fire a master event to notify that the minion is
+            # available.
+            if self.opts.get('__role') == 'syndic':
+                data = 'Syndic {0} started at {1}'.format(
+                    self.opts['id'],
+                    time.asctime()
+                )
+                tag = salt.utils.event.tagify(
+                    [self.opts['id'], 'start'],
+                    'syndic'
+                )
+            else:
+                data = 'Minion {0} started at {1}'.format(
+                    self.opts['id'],
+                    time.asctime()
+                )
+                tag = salt.utils.event.tagify(
+                    [self.opts['id'], 'start'],
+                    'minion'
+                )
+            load = {'id': self.opts['id'],
+                    'cmd': '_minion_event',
+                    'pretag': None,
+                    'tok': self.tok,
+                    'data': data,
+                    'tag': tag}
+            req_channel = salt.utils.async.SyncWrapper(
+                AsyncTCPReqChannel, (self.opts,)
+            )
+            try:
+                req_channel.send(load, timeout=60)
+            except salt.exceptions.SaltReqTimeoutError:
+                log.info('fire_master failed: master could not be contacted. Request timed out.')
+            except Exception:
+                log.info('fire_master failed: {0}'.format(
+                    traceback.format_exc())
+                )
+        else:
+            self._reconnected = True
+
+    def disconnect_callback(self):
+        if self._closing:
+            return
+        self.connected = False
+        self.event.fire_event(
+            {'master': self.opts['master']},
+            '__master_disconnected'
+        )
 
     @tornado.gen.coroutine
     def connect(self):
         try:
-            self.auth = salt.crypt.AsyncAuth(self.opts)
+            self.auth = salt.crypt.AsyncAuth(self.opts, io_loop=self.io_loop)
+            self.tok = self.auth.gen_token('salt')
             if not self.auth.authenticated:
                 yield self.auth.authenticate()
-            self.message_client = SaltMessageClient(self.opts['master_ip'],
-                                                    int(self.auth.creds['publish_port']),
-                                                    io_loop=self.io_loop)
-            yield self.message_client.connect()  # wait for the client to be connected
-            self.connected = True
+            if self.auth.authenticated:
+                self.message_client = SaltMessageClient(
+                    self.opts,
+                    self.opts['master_ip'],
+                    int(self.auth.creds['publish_port']),
+                    io_loop=self.io_loop,
+                    connect_callback=self.connect_callback,
+                    disconnect_callback=self.disconnect_callback)
+                yield self.message_client.connect()  # wait for the client to be connected
+                self.connected = True
         # TODO: better exception handling...
         except KeyboardInterrupt:
             raise
-        except:
-            raise SaltClientError('Unable to sign_in to master')  # TODO: better error message
+        except Exception as exc:
+            if '-|RETRY|-' not in exc:
+                raise SaltClientError('Unable to sign_in to master: {0}'.format(exc))  # TODO: better error message
 
     def on_recv(self, callback):
         '''
@@ -233,6 +509,12 @@ class AsyncTCPPubChannel(salt.transport.mixins.auth.AESPubClientMixin, salt.tran
 
         @tornado.gen.coroutine
         def wrap_callback(body):
+            if not isinstance(body, dict):
+                # TODO: For some reason we need to decode here for things
+                #       to work. Fix this.
+                body = msgpack.loads(body)
+                if six.PY3:
+                    body = salt.transport.frame.decode_embedded_strs(body)
             ret = yield self._decode_payload(body)
             callback(ret)
         return self.message_client.on_recv(wrap_callback)
@@ -242,13 +524,27 @@ class TCPReqServerChannel(salt.transport.mixins.auth.AESReqServerMixin, salt.tra
     # TODO: opts!
     backlog = 5
 
+    def __init__(self, opts):
+        salt.transport.server.ReqServerChannel.__init__(self, opts)
+        self._socket = None
+
     @property
     def socket(self):
         return self._socket
 
     def close(self):
-        self.socket.shutdown(socket.SHUT_RDWR)
-        self.socket.close()
+        if self._socket is not None:
+            try:
+                self._socket.shutdown(socket.SHUT_RDWR)
+            except socket.error as exc:
+                if exc.errno == errno.ENOTCONN:
+                    # We may try to shutdown a socket which is already disconnected.
+                    # Ignore this condition and continue.
+                    pass
+                else:
+                    raise exc
+            self._socket.close()
+            self._socket = None
 
     def __del__(self):
         self.close()
@@ -258,10 +554,17 @@ class TCPReqServerChannel(salt.transport.mixins.auth.AESReqServerMixin, salt.tra
         Pre-fork we need to create the zmq router device
         '''
         salt.transport.mixins.auth.AESReqServerMixin.pre_fork(self, process_manager)
-        self._socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        self._socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-        self._socket.setblocking(0)
-        self._socket.bind((self.opts['interface'], int(self.opts['ret_port'])))
+        if USE_LOAD_BALANCER:
+            self.socket_queue = multiprocessing.Queue()
+            process_manager.add_process(
+                LoadBalancerServer, args=(self.opts, self.socket_queue)
+            )
+        elif not salt.utils.is_windows():
+            self._socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            self._socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+            _set_tcp_keepalive(self._socket, self.opts)
+            self._socket.setblocking(0)
+            self._socket.bind((self.opts['interface'], int(self.opts['ret_port'])))
 
     def post_fork(self, payload_handler, io_loop):
         '''
@@ -272,11 +575,21 @@ class TCPReqServerChannel(salt.transport.mixins.auth.AESReqServerMixin, salt.tra
         '''
         self.payload_handler = payload_handler
         self.io_loop = io_loop
-        self.req_server = SaltMessageServer(self.handle_message, io_loop=self.io_loop)
-        self.req_server.add_socket(self.socket)
-        self.socket.listen(self.backlog)
-
         self.serial = salt.payload.Serial(self.opts)
+        if USE_LOAD_BALANCER:
+            self.req_server = LoadBalancerWorker(
+                self.socket_queue, self.handle_message, io_loop=self.io_loop
+            )
+        else:
+            if salt.utils.is_windows():
+                self._socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+                self._socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+                _set_tcp_keepalive(self._socket, self.opts)
+                self._socket.setblocking(0)
+                self._socket.bind((self.opts['interface'], int(self.opts['ret_port'])))
+            self.req_server = SaltMessageServer(self.handle_message, io_loop=self.io_loop)
+            self.req_server.add_socket(self._socket)
+            self._socket.listen(self.backlog)
         salt.transport.mixins.auth.AESReqServerMixin.post_fork(self, payload_handler, io_loop)
 
     @tornado.gen.coroutine
@@ -287,18 +600,20 @@ class TCPReqServerChannel(salt.transport.mixins.auth.AESReqServerMixin, salt.tra
         try:
             payload = self._decode_payload(payload)
         except Exception:
-            stream.write(frame_msg('bad load', header=header))
+            stream.write(salt.transport.frame.frame_msg('bad load', header=header))
             raise tornado.gen.Return()
 
         # TODO helper functions to normalize payload?
         if not isinstance(payload, dict) or not isinstance(payload.get('load'), dict):
-            yield stream.write(frame_msg('payload and load must be a dict', header=header))
+            yield stream.write(salt.transport.frame.frame_msg(
+                'payload and load must be a dict', header=header))
             raise tornado.gen.Return()
 
         # intercept the "_auth" commands, since the main daemon shouldn't know
         # anything about our key auth
         if payload['enc'] == 'clear' and payload.get('load', {}).get('cmd') == '_auth':
-            yield stream.write(frame_msg(self._auth(payload['load']), header=header))
+            yield stream.write(salt.transport.frame.frame_msg(
+                self._auth(payload['load']), header=header))
             raise tornado.gen.Return()
 
         # TODO: test
@@ -313,11 +628,11 @@ class TCPReqServerChannel(salt.transport.mixins.auth.AESReqServerMixin, salt.tra
 
         req_fun = req_opts.get('fun', 'send')
         if req_fun == 'send_clear':
-            stream.write(frame_msg(ret, header=header))
+            stream.write(salt.transport.frame.frame_msg(ret, header=header))
         elif req_fun == 'send':
-            stream.write(frame_msg(self.crypticle.dumps(ret), header=header))
+            stream.write(salt.transport.frame.frame_msg(self.crypticle.dumps(ret), header=header))
         elif req_fun == 'send_private':
-            stream.write(frame_msg(self._encrypt_private(ret,
+            stream.write(salt.transport.frame.frame_msg(self._encrypt_private(ret,
                                                          req_opts['key'],
                                                          req_opts['tgt'],
                                                          ), header=header))
@@ -331,7 +646,7 @@ class TCPReqServerChannel(salt.transport.mixins.auth.AESReqServerMixin, salt.tra
 
 class SaltMessageServer(tornado.tcpserver.TCPServer, object):
     '''
-    Raw TCP server which will recieve all of the TCP streams and re-assemble
+    Raw TCP server which will receive all of the TCP streams and re-assemble
     messages that are sent through to us
     '''
     def __init__(self, message_handler, *args, **kwargs):
@@ -347,20 +662,24 @@ class SaltMessageServer(tornado.tcpserver.TCPServer, object):
         '''
         log.trace('Req client {0} connected'.format(address))
         self.clients.append((stream, address))
+        unpacker = msgpack.Unpacker()
         try:
             while True:
-                framed_msg_len = yield stream.read_until(' ')
-                framed_msg_raw = yield stream.read_bytes(int(framed_msg_len.strip()))
-                framed_msg = msgpack.loads(framed_msg_raw)
-                header = framed_msg['head']
-                body = msgpack.loads(framed_msg['body'])
-                self.io_loop.spawn_callback(self.message_handler, stream, header, body)
+                wire_bytes = yield stream.read_bytes(4096, partial=True)
+                unpacker.feed(wire_bytes)
+                for framed_msg in unpacker:
+                    if six.PY3:
+                        framed_msg = salt.transport.frame.decode_embedded_strs(
+                            framed_msg
+                        )
+                    header = framed_msg['head']
+                    self.io_loop.spawn_callback(self.message_handler, stream, header, framed_msg['body'])
 
         except tornado.iostream.StreamClosedError:
             log.trace('req client disconnected {0}'.format(address))
             self.clients.remove((stream, address))
         except Exception as e:
-            log.trace('other master-side exception??', e, e.__module__, e.extra)
+            log.trace('other master-side exception: {0}'.format(e))
             self.clients.remove((stream, address))
             stream.close()
 
@@ -374,43 +693,116 @@ class SaltMessageServer(tornado.tcpserver.TCPServer, object):
             self.clients.remove(item)
 
 
+if USE_LOAD_BALANCER:
+    class LoadBalancerWorker(SaltMessageServer):
+        '''
+        This will receive TCP connections from 'LoadBalancerServer' via
+        a multiprocessing queue.
+        Since the queue is shared amongst workers, only one worker will handle
+        a given connection.
+        '''
+        def __init__(self, socket_queue, message_handler, *args, **kwargs):
+            super(LoadBalancerWorker, self).__init__(
+                message_handler, *args, **kwargs)
+            self.socket_queue = socket_queue
+
+            t = threading.Thread(target=self.socket_queue_thread)
+            t.start()
+
+        def socket_queue_thread(self):
+            try:
+                while True:
+                    client_socket, address = self.socket_queue.get(True, None)
+
+                    # 'self.io_loop' initialized in super class
+                    # 'tornado.tcpserver.TCPServer'.
+                    # 'self._handle_connection' defined in same super class.
+                    self.io_loop.spawn_callback(
+                        self._handle_connection, client_socket, address)
+            except (KeyboardInterrupt, SystemExit):
+                pass
+
+
+class TCPClientKeepAlive(tornado.tcpclient.TCPClient):
+    '''
+    Override _create_stream() in TCPClient to enable keep alive support.
+    '''
+    def __init__(self, opts, resolver=None, io_loop=None):
+        self.opts = opts
+        super(TCPClientKeepAlive, self).__init__(
+            resolver=resolver, io_loop=io_loop)
+
+    def _create_stream(self, max_buffer_size, af, addr):
+        # Always connect in plaintext; we'll convert to ssl if necessary
+        # after one connection has completed.
+        sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        _set_tcp_keepalive(sock, self.opts)
+        stream = tornado.iostream.IOStream(
+            sock,
+            io_loop=self.io_loop,
+            max_buffer_size=max_buffer_size)
+        return stream.connect(addr)
+
+
+# TODO consolidate with IPCClient
+# TODO: limit in-flight messages.
 # TODO: singleton? Something to not re-create the tcp connection so much
 class SaltMessageClient(object):
     '''
     Low-level message sending client
     '''
-    def __init__(self, host, port, io_loop=None):
+    def __init__(self, opts, host, port, io_loop=None, resolver=None,
+                 connect_callback=None, disconnect_callback=None):
+        self.opts = opts
         self.host = host
         self.port = port
+        self.connect_callback = connect_callback
+        self.disconnect_callback = disconnect_callback
 
         self.io_loop = io_loop or tornado.ioloop.IOLoop.current()
 
-        self._tcp_client = tornado.tcpclient.TCPClient(io_loop=self.io_loop)
+        self._tcp_client = TCPClientKeepAlive(
+            opts, io_loop=self.io_loop, resolver=resolver)
 
         self._mid = 1
-        self._max_messages = sys.maxint - 1  # number of IDs before we wrap
+        self._max_messages = int((1 << 31) - 2)  # number of IDs before we wrap
 
         # TODO: max queue size
         self.send_queue = []  # queue of messages to be sent
         self.send_future_map = {}  # mapping of request_id -> Future
         self.send_timeout_map = {}  # request_id -> timeout_callback
 
+        self._read_until_future = None
+        self._on_recv = None
+        self._closing = False
         self._connecting_future = self.connect()
         self.io_loop.spawn_callback(self._stream_return)
 
-        self._on_recv = None
-        self._closing = False
-
     # TODO: timeout inflight sessions
-    def destroy(self):
+    def close(self):
+        if self._closing:
+            return
         self._closing = True
-        if hasattr(self, '_stream'):
+        if hasattr(self, '_stream') and not self._stream.closed():
             self._stream.close()
+            if self._read_until_future is not None:
+                # This will prevent this message from showing up:
+                # '[ERROR   ] Future exception was never retrieved:
+                # StreamClosedError'
+                # This happens because the logic is always waiting to read
+                # the next message and the associated read future is marked
+                # 'StreamClosedError' when the stream is closed.
+                self._read_until_future.exc_info()
+        self._tcp_client.close()
+        # Clear callback references to allow the object that they belong to
+        # to be deleted.
+        self.connect_callback = None
+        self.disconnect_callback = None
 
     def __del__(self):
-        self.destroy()
+        self.close()
 
-    def connect(self, callback=None):
+    def connect(self):
         '''
         Ask for this client to reconnect to the origin
         '''
@@ -421,11 +813,12 @@ class SaltMessageClient(object):
             self._connecting_future = future
             self.io_loop.add_callback(self._connect)
 
-        if callback is not None:
-            def handle_future(future):
-                response = future.result()
-                self.io_loop.add_callback(callback, response)
-            future.add_done_callback(handle_future)
+            # Add the callback only when a new future is created
+            if self.connect_callback is not None:
+                def handle_future(future):
+                    response = future.result()
+                    self.io_loop.add_callback(self.connect_callback, response)
+                future.add_done_callback(handle_future)
 
         return future
 
@@ -437,7 +830,6 @@ class SaltMessageClient(object):
         '''
         while True:
             if self._closing:
-                self.destroy()
                 break
             try:
                 self._stream = yield self._tcp_client.connect(self.host, self.port)
@@ -449,59 +841,91 @@ class SaltMessageClient(object):
 
     @tornado.gen.coroutine
     def _stream_return(self):
-        while not self._connecting_future.done() or self._connecting_future.result() is not True:
+        while not self._closing and (
+                not self._connecting_future.done() or
+                self._connecting_future.result() is not True):
             yield self._connecting_future
-        while True:
+        unpacker = msgpack.Unpacker()
+        while not self._closing:
             try:
-                framed_msg_len = yield self._stream.read_until(' ')
-                framed_msg_raw = yield self._stream.read_bytes(int(framed_msg_len.strip()))
-                framed_msg = msgpack.loads(framed_msg_raw)
-                header = framed_msg['head']
-                message_id = header.get('mid')
-                body = msgpack.loads(framed_msg['body'])
+                self._read_until_future = self._stream.read_bytes(4096, partial=True)
+                wire_bytes = yield self._read_until_future
+                unpacker.feed(wire_bytes)
+                for framed_msg in unpacker:
+                    if six.PY3:
+                        framed_msg = salt.transport.frame.decode_embedded_strs(
+                            framed_msg
+                        )
+                    header = framed_msg['head']
+                    body = framed_msg['body']
+                    message_id = header.get('mid')
 
-                if message_id in self.send_future_map:
-                    self.send_future_map.pop(message_id).set_result(body)
-                    self.remove_message_timeout(message_id)
-                else:
-                    if self._on_recv is not None:
-                        self.io_loop.spawn_callback(self._on_recv, header, body)
+                    if message_id in self.send_future_map:
+                        self.send_future_map.pop(message_id).set_result(body)
+                        self.remove_message_timeout(message_id)
                     else:
-                        log.error('Got response for message_id {0} that we are not tracking'.format(message_id))
+                        if self._on_recv is not None:
+                            self.io_loop.spawn_callback(self._on_recv, header, body)
+                        else:
+                            log.error('Got response for message_id {0} that we are not tracking'.format(message_id))
             except tornado.iostream.StreamClosedError as e:
-                log.debug('tcp stream to {0}:{1} closed, unable to send'.format(self.host, self.port))
-                for future in self.send_future_map.itervalues():
+                log.debug('tcp stream to {0}:{1} closed, unable to recv'.format(self.host, self.port))
+                for future in six.itervalues(self.send_future_map):
                     future.set_exception(e)
                 self.send_future_map = {}
+                if self._closing:
+                    return
+                if self.disconnect_callback:
+                    self.disconnect_callback()
                 # if the last connect finished, then we need to make a new one
                 if self._connecting_future.done():
                     self._connecting_future = self.connect()
                 yield self._connecting_future
+            except TypeError:
+                # This is an invalid transport
+                if 'detect_mode' in self.opts:
+                    log.info('There was an error trying to use TCP transport; '
+                             'attempting to fallback to another transport')
+                else:
+                    raise SaltClientError
             except Exception as e:
                 log.error('Exception parsing response', exc_info=True)
-                for future in self.send_future_map.itervalues():
+                for future in six.itervalues(self.send_future_map):
                     future.set_exception(e)
                 self.send_future_map = {}
+                if self._closing:
+                    return
+                if self.disconnect_callback:
+                    self.disconnect_callback()
                 # if the last connect finished, then we need to make a new one
                 if self._connecting_future.done():
                     self._connecting_future = self.connect()
+                yield self._connecting_future
 
     @tornado.gen.coroutine
     def _stream_send(self):
         while not self._connecting_future.done() or self._connecting_future.result() is not True:
             yield self._connecting_future
         while len(self.send_queue) > 0:
-            message_id, item = self.send_queue.pop(0)
+            message_id, item = self.send_queue[0]
             try:
                 yield self._stream.write(item)
+                del self.send_queue[0]
             # if the connection is dead, lets fail this send, and make sure we
             # attempt to reconnect
             except tornado.iostream.StreamClosedError as e:
-                self.send_future_map.pop(message_id).set_exception(Exception())
+                if message_id in self.send_future_map:
+                    self.send_future_map.pop(message_id).set_exception(e)
                 self.remove_message_timeout(message_id)
+                del self.send_queue[0]
+                if self._closing:
+                    return
+                if self.disconnect_callback:
+                    self.disconnect_callback()
                 # if the last connect finished, then we need to make a new one
                 if self._connecting_future.done():
                     self._connecting_future = self.connect()
+                yield self._connecting_future
 
     def _message_id(self):
         wrap = False
@@ -520,7 +944,7 @@ class SaltMessageClient(object):
     # TODO: return a message object which takes care of multiplexing?
     def on_recv(self, callback):
         '''
-        Register a callback for recieved messages (that we didn't initiate)
+        Register a callback for received messages (that we didn't initiate)
         '''
         if callback is None:
             self._on_recv = callback
@@ -536,10 +960,14 @@ class SaltMessageClient(object):
         self.io_loop.remove_timeout(timeout)
 
     def timeout_message(self, message_id):
-        del self.send_timeout_map[message_id]
-        self.send_future_map.pop(message_id).set_exception(SaltReqTimeoutError('Message timed out'))
+        if message_id in self.send_timeout_map:
+            del self.send_timeout_map[message_id]
+        if message_id in self.send_future_map:
+            self.send_future_map.pop(message_id).set_exception(
+                SaltReqTimeoutError('Message timed out')
+            )
 
-    def send(self, msg, timeout=None, callback=None):
+    def send(self, msg, timeout=None, callback=None, raw=False):
         '''
         Send given message, and return a future
         '''
@@ -555,6 +983,9 @@ class SaltMessageClient(object):
         # Add this future to the mapping
         self.send_future_map[message_id] = future
 
+        if self.opts.get('detect_mode') is True:
+            timeout = 1
+
         if timeout is not None:
             send_timeout = self.io_loop.call_later(timeout, self.timeout_message, message_id)
             self.send_timeout_map[message_id] = send_timeout
@@ -562,83 +993,279 @@ class SaltMessageClient(object):
         # if we don't have a send queue, we need to spawn the callback to do the sending
         if len(self.send_queue) == 0:
             self.io_loop.spawn_callback(self._stream_send)
-        self.send_queue.append((message_id, frame_msg(msg, header=header)))
+        self.send_queue.append((message_id, salt.transport.frame.frame_msg(msg, header=header)))
         return future
+
+
+class Subscriber(object):
+    '''
+    Client object for use with the TCP publisher server
+    '''
+    def __init__(self, stream, address):
+        self.stream = stream
+        self.address = address
+        self._closing = False
+        self._read_until_future = None
+        self.id_ = None
+
+    def close(self):
+        if self._closing:
+            return
+        self._closing = True
+        if not self.stream.closed():
+            self.stream.close()
+            if self._read_until_future is not None:
+                # This will prevent this message from showing up:
+                # '[ERROR   ] Future exception was never retrieved:
+                # StreamClosedError'
+                # This happens because the logic is always waiting to read
+                # the next message and the associated read future is marked
+                # 'StreamClosedError' when the stream is closed.
+                self._read_until_future.exc_info()
+
+    def __del__(self):
+        self.close()
 
 
 class PubServer(tornado.tcpserver.TCPServer, object):
     '''
     TCP publisher
     '''
-    def __init__(self, *args, **kwargs):
-        super(PubServer, self).__init__(*args, **kwargs)
-        self.clients = []
+    def __init__(self, opts, io_loop=None):
+        super(PubServer, self).__init__(io_loop=io_loop)
+        self.opts = opts
+        self._closing = False
+        self.clients = set()
+        self.aes_funcs = salt.master.AESFuncs(self.opts)
+        self.present = {}
+        self.presence_events = False
+        if self.opts.get('presence_events', False):
+            tcp_only = True
+            for transport, _ in iter_transport_opts(self.opts):
+                if transport != 'tcp':
+                    tcp_only = False
+            if tcp_only:
+                # Only when the transport is TCP only, the presence events will
+                # be handled here. Otherwise, it will be handled in the
+                # 'Maintenance' process.
+                self.presence_events = True
+
+        if self.presence_events:
+            self.event = salt.utils.event.get_event(
+                'master',
+                opts=self.opts,
+                listen=False
+            )
+
+    def close(self):
+        if self._closing:
+            return
+        self._closing = True
+
+    def __del__(self):
+        self.close()
+
+    def _add_client_present(self, client):
+        id_ = client.id_
+        if id_ in self.present:
+            clients = self.present[id_]
+            clients.add(client)
+        else:
+            self.present[id_] = set([client])
+            if self.presence_events:
+                data = {'new': [id_],
+                        'lost': []}
+                self.event.fire_event(
+                    data,
+                    salt.utils.event.tagify('change', 'presence')
+                )
+                data = {'present': list(self.present.keys())}
+                self.event.fire_event(
+                    data,
+                    salt.utils.event.tagify('present', 'presence')
+                )
+
+    def _remove_client_present(self, client):
+        id_ = client.id_
+        if id_ is None or id_ not in self.present:
+            # This is possible if _remove_client_present() is invoked
+            # before the minion's id is validated.
+            return
+
+        clients = self.present[id_]
+        if client not in clients:
+            # Since _remove_client_present() is potentially called from
+            # _stream_read() and/or publish_payload(), it is possible for
+            # it to be called twice, in which case we will get here.
+            # This is not an abnormal case, so no logging is required.
+            return
+
+        clients.remove(client)
+        if len(clients) == 0:
+            del self.present[id_]
+            if self.presence_events:
+                data = {'new': [],
+                        'lost': [id_]}
+                self.event.fire_event(
+                    data,
+                    salt.utils.event.tagify('change', 'presence')
+                )
+                data = {'present': list(self.present.keys())}
+                self.event.fire_event(
+                    data,
+                    salt.utils.event.tagify('present', 'presence')
+                )
+
+    @tornado.gen.coroutine
+    def _stream_read(self, client):
+        unpacker = msgpack.Unpacker()
+        while not self._closing:
+            try:
+                client._read_until_future = client.stream.read_bytes(4096, partial=True)
+                wire_bytes = yield client._read_until_future
+                unpacker.feed(wire_bytes)
+                for framed_msg in unpacker:
+                    if six.PY3:
+                        framed_msg = salt.transport.frame.decode_embedded_strs(
+                            framed_msg
+                        )
+                    body = framed_msg['body']
+                    if body['enc'] != 'aes':
+                        # We only accept 'aes' encoded messages for 'id'
+                        continue
+                    crypticle = salt.crypt.Crypticle(self.opts, salt.master.SMaster.secrets['aes']['secret'].value)
+                    load = crypticle.loads(body['load'])
+                    if six.PY3:
+                        load = salt.transport.frame.decode_embedded_strs(load)
+                    if not self.aes_funcs.verify_minion(load['id'], load['tok']):
+                        continue
+                    client.id_ = load['id']
+                    self._add_client_present(client)
+            except tornado.iostream.StreamClosedError as e:
+                log.debug('tcp stream to {0} closed, unable to recv'.format(client.address))
+                client.close()
+                self._remove_client_present(client)
+                self.clients.discard(client)
+                break
+            except Exception as e:
+                log.error('Exception parsing response', exc_info=True)
+                continue
 
     def handle_stream(self, stream, address):
         log.trace('Subscriber at {0} connected'.format(address))
-        self.clients.append((stream, address))
+        client = Subscriber(stream, address)
+        self.clients.add(client)
+        self.io_loop.spawn_callback(self._stream_read, client)
 
+    # TODO: ACK the publish through IPC
     @tornado.gen.coroutine
-    def publish_payload(self, package):
-        log.trace('TCP PubServer starting to publish payload')
-        package = package[0]  # ZMQ (The IPC calling us) ism :/
-        payload = frame_msg(salt.payload.unpackage(package)['payload'], raw_body=True)
+    def publish_payload(self, package, _):
+        log.debug('TCP PubServer sending payload: {0}'.format(package))
+        payload = salt.transport.frame.frame_msg(package['payload'])
+
         to_remove = []
-        for item in self.clients:
-            client, address = item
-            try:
-                f = client.write(payload)
-                self.io_loop.add_future(f, lambda f: True)
-            except tornado.iostream.StreamClosedError:
-                to_remove.append(item)
-        for item in to_remove:
-            client, address = item
-            log.debug('Subscriber at {0} has disconnected from publisher'.format(address))
+        if 'topic_lst' in package:
+            topic_lst = package['topic_lst']
+            for topic in topic_lst:
+                if topic in self.present:
+                    # This will rarely be a list of more than 1 item. It will
+                    # be more than 1 item if the minion disconnects from the
+                    # master in an unclean manner (eg cable yank), then
+                    # restarts and the master is yet to detect the disconnect
+                    # via TCP keep-alive.
+                    for client in self.present[topic]:
+                        try:
+                            # Write the packed str
+                            f = client.stream.write(payload)
+                            self.io_loop.add_future(f, lambda f: True)
+                        except tornado.iostream.StreamClosedError:
+                            to_remove.append(client)
+                else:
+                    log.debug('Publish target {0} not connected'.format(topic))
+        else:
+            for client in self.clients:
+                try:
+                    # Write the packed str
+                    f = client.stream.write(payload)
+                    self.io_loop.add_future(f, lambda f: True)
+                except tornado.iostream.StreamClosedError:
+                    to_remove.append(client)
+        for client in to_remove:
+            log.debug('Subscriber at {0} has disconnected from publisher'.format(client.address))
             client.close()
-            self.clients.remove(item)
+            self._remove_client_present(client)
+            self.clients.discard(client)
         log.trace('TCP PubServer finished publishing payload')
 
 
 class TCPPubServerChannel(salt.transport.server.PubServerChannel):
+    # TODO: opts!
+    # Based on default used in tornado.netutil.bind_sockets()
+    backlog = 128
+
     def __init__(self, opts):
         self.opts = opts
         self.serial = salt.payload.Serial(self.opts)  # TODO: in init?
+        self.io_loop = None
 
-    def _publish_daemon(self):
+    def __setstate__(self, state):
+        salt.master.SMaster.secrets = state['secrets']
+        self.__init__(state['opts'])
+
+    def __getstate__(self):
+        return {'opts': self.opts,
+                'secrets': salt.master.SMaster.secrets}
+
+    def _publish_daemon(self, log_queue=None):
         '''
         Bind to the interface specified in the configuration file
         '''
         salt.utils.appendproctitle(self.__class__.__name__)
 
-        # Set up the context
-        context = zmq.Context(1)
-        # Prepare minion pull socket
-        pull_sock = context.socket(zmq.PULL)
-        pull_uri = 'ipc://{0}'.format(
-            os.path.join(self.opts['sock_dir'], 'publish_pull_tcp.ipc')
+        if log_queue is not None:
+            salt.log.setup.set_multiprocessing_logging_queue(log_queue)
+        salt.log.setup.setup_multiprocessing_logging(log_queue)
+
+        # Check if io_loop was set outside
+        if self.io_loop is None:
+            self.io_loop = tornado.ioloop.IOLoop.current()
+
+        # Spin up the publisher
+        pub_server = PubServer(self.opts, io_loop=self.io_loop)
+        sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        _set_tcp_keepalive(sock, self.opts)
+        sock.setblocking(0)
+        sock.bind((self.opts['interface'], int(self.opts['publish_port'])))
+        sock.listen(self.backlog)
+        # pub_server will take ownership of the socket
+        pub_server.add_socket(sock)
+
+        # Set up Salt IPC server
+        if self.opts.get('ipc_mode', '') == 'tcp':
+            pull_uri = int(self.opts.get('tcp_master_publish_pull', 4514))
+        else:
+            pull_uri = os.path.join(self.opts['sock_dir'], 'publish_pull.ipc')
+
+        pull_sock = salt.transport.ipc.IPCMessageServer(
+            pull_uri,
+            io_loop=self.io_loop,
+            payload_handler=pub_server.publish_payload,
         )
-        salt.utils.zeromq.check_ipc_path_max_len(pull_uri)
 
         # Securely create socket
         log.info('Starting the Salt Puller on {0}'.format(pull_uri))
         old_umask = os.umask(0o177)
         try:
-            pull_sock.bind(pull_uri)
+            pull_sock.start()
         finally:
             os.umask(old_umask)
 
-        # load up the IOLoop
-        io_loop = zmq.eventloop.ioloop.ZMQIOLoop()
-        # add the publisher
-        pub_server = PubServer(io_loop=io_loop)
-        pub_server.listen(int(self.opts['publish_port']), address=self.opts['interface'])
-
-        # add our IPC
-        stream = zmq.eventloop.zmqstream.ZMQStream(pull_sock, io_loop=io_loop)
-        stream.on_recv(pub_server.publish_payload)
-
         # run forever
-        io_loop.start()
+        try:
+            self.io_loop.start()
+        except (KeyboardInterrupt, SystemExit):
+            salt.log.setup.shutdown_multiprocessing_logging()
 
     def pre_fork(self, process_manager):
         '''
@@ -646,7 +1273,13 @@ class TCPPubServerChannel(salt.transport.server.PubServerChannel):
         primarily be used to create IPC channels and create our daemon process to
         do the actual publishing
         '''
-        process_manager.add_process(self._publish_daemon)
+        kwargs = {}
+        if salt.utils.is_windows():
+            kwargs['log_queue'] = (
+                salt.log.setup.get_multiprocessing_logging_queue()
+            )
+
+        process_manager.add_process(self._publish_daemon, kwargs=kwargs)
 
     def publish(self, load):
         '''
@@ -660,17 +1293,23 @@ class TCPPubServerChannel(salt.transport.server.PubServerChannel):
             master_pem_path = os.path.join(self.opts['pki_dir'], 'master.pem')
             log.debug("Signing data packet")
             payload['sig'] = salt.crypt.sign_message(master_pem_path, payload['load'])
-        # Send 0MQ to the publisher
-        context = zmq.Context(1)
-        pub_sock = context.socket(zmq.PUSH)
-        pull_uri = 'ipc://{0}'.format(
-            os.path.join(self.opts['sock_dir'], 'publish_pull_tcp.ipc')
-            )
-        pub_sock.connect(pull_uri)
+        # Use the Salt IPC server
+        if self.opts.get('ipc_mode', '') == 'tcp':
+            pull_uri = int(self.opts.get('tcp_master_publish_pull', 4514))
+        else:
+            pull_uri = os.path.join(self.opts['sock_dir'], 'publish_pull.ipc')
+        # TODO: switch to the actual async interface
+        #pub_sock = salt.transport.ipc.IPCMessageClient(self.opts, io_loop=self.io_loop)
+        pub_sock = salt.utils.async.SyncWrapper(
+            salt.transport.ipc.IPCMessageClient,
+            (pull_uri,)
+        )
+        pub_sock.connect()
+
         int_payload = {'payload': self.serial.dumps(payload)}
 
         # add some targeting stuff for lists only (for now)
         if load['tgt_type'] == 'list':
             int_payload['topic_lst'] = load['tgt']
-
-        pub_sock.send(self.serial.dumps(int_payload))
+        # Send it over IPC!
+        pub_sock.send(int_payload)

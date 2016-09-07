@@ -22,7 +22,6 @@ from salt.template import compile_template
 from salt.utils.odict import OrderedDict
 from salt.utils.pyobjects import (StateFactory, State, Registry,
                                   SaltObject, InvalidFunction, DuplicateState)
-
 File = StateFactory('file')
 Service = StateFactory('service')
 
@@ -55,10 +54,18 @@ include('http')
 
 extend_template = '''#!pyobjects
 include('http')
+
+from salt.utils.pyobjects import StateFactory
+Service = StateFactory('service')
+
 Service.running(extend('apache'), watch=[{'file': '/etc/file'}])
 '''
 
 map_template = '''#!pyobjects
+from salt.utils.pyobjects import StateFactory
+Service = StateFactory('service')
+
+
 class Samba(Map):
     __merge__ = 'samba:lookup'
 
@@ -84,8 +91,26 @@ with Pkg.installed("samba", names=[Samba.server, Samba.client]):
 import_template = '''#!pyobjects
 import salt://map.sls
 
-Pkg.removed("samba-imported", names=[Samba.server, Samba.client])
+Pkg.removed("samba-imported", names=[map.Samba.server, map.Samba.client])
 '''
+
+recursive_map_template = '''#!pyobjects
+from salt://map.sls import Samba
+
+class CustomSamba(Samba):
+    pass
+'''
+
+recursive_import_template = '''#!pyobjects
+from salt://recursive_map.sls import CustomSamba
+
+Pkg.removed("samba-imported", names=[CustomSamba.server, CustomSamba.client])'''
+
+scope_test_import_template = '''#!pyobjects
+from salt://recursive_map.sls import CustomSamba
+
+# since we import CustomSamba we should shouldn't be able to see Samba
+Pkg.removed("samba-imported", names=[Samba.server, Samba.client])'''
 
 from_import_template = '''#!pyobjects
 # this spacing is like this on purpose to ensure it's stripped properly
@@ -110,6 +135,9 @@ from salt://password.sls import password
 '''
 
 requisite_implicit_list_template = '''#!pyobjects
+from salt.utils.pyobjects import StateFactory
+Service = StateFactory('service')
+
 with Pkg.installed("pkg"):
     Service.running("service", watch=File("file"), require=Cmd("cmd"))
 '''
@@ -261,7 +289,9 @@ class RendererMixin(object):
         state = salt.state.State(self.config)
         return compile_template(full_path,
                                 state.rend,
-                                state.opts['renderer'])
+                                state.opts['renderer'],
+                                state.opts['renderer_blacklist'],
+                                state.opts['renderer_whitelist'])
 
 
 class RendererTests(RendererMixin, StateTests):
@@ -290,7 +320,11 @@ class RendererTests(RendererMixin, StateTests):
         ]))
 
     def test_extend(self):
-        ret = self.render(extend_template)
+        ret = self.render(extend_template,
+                          {'grains': {
+                              'os_family': 'Debian',
+                              'os': 'Debian'
+                          }})
         self.assertEqual(ret, OrderedDict([
             ('include', ['http']),
             ('extend', OrderedDict([
@@ -323,6 +357,22 @@ class RendererTests(RendererMixin, StateTests):
         render_and_assert(from_import_template)
         render_and_assert(import_as_template)
 
+        self.write_template_file("recursive_map.sls", recursive_map_template)
+        render_and_assert(recursive_import_template)
+
+    def test_import_scope(self):
+        self.write_template_file("map.sls", map_template)
+        self.write_template_file("recursive_map.sls", recursive_map_template)
+
+        def do_render():
+            ret = self.render(scope_test_import_template,
+                              {'grains': {
+                                  'os_family': 'Debian',
+                                  'os': 'Debian'
+                              }})
+
+        self.assertRaises(NameError, do_render)
+
     def test_random_password(self):
         '''Test for https://github.com/saltstack/salt/issues/21796'''
         ret = self.render(random_password_template)
@@ -334,7 +384,11 @@ class RendererTests(RendererMixin, StateTests):
 
     def test_requisite_implicit_list(self):
         '''Ensure that the implicit list characteristic works as expected'''
-        ret = self.render(requisite_implicit_list_template)
+        ret = self.render(requisite_implicit_list_template,
+                          {'grains': {
+                              'os_family': 'Debian',
+                              'os': 'Debian'
+                          }})
 
         self.assertEqual(ret, OrderedDict([
             ('pkg', OrderedDict([

@@ -70,7 +70,7 @@ def latest(name,
     identity
         Private SSH key on the minion server for authentication (ssh://)
 
-        .. versionadded:: 2015.2.0
+        .. versionadded:: 2015.5.0
 
     force
         Force hg to clone into pre-existing directories (deletes contents)
@@ -116,7 +116,7 @@ def _update_repo(ret, name, target, clean, user, identity, rev, opts):
             '"hg pull && hg up is probably required"'.format(target)
     )
 
-    current_rev = __salt__['hg.revision'](target, user=user)
+    current_rev = __salt__['hg.revision'](target, user=user, rev='.')
     if not current_rev:
         return _fail(
                 ret,
@@ -137,7 +137,7 @@ def _update_repo(ret, name, target, clean, user, identity, rev, opts):
     else:
         __salt__['hg.update'](target, 'tip', force=clean, user=user)
 
-    new_rev = __salt__['hg.revision'](cwd=target, user=user)
+    new_rev = __salt__['hg.revision'](cwd=target, user=user, rev='.')
 
     if current_rev != new_rev:
         revision_text = '{0} => {1}'.format(current_rev, new_rev)

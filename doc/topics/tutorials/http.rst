@@ -1,9 +1,12 @@
+.. _tutorial-http:
+
 HTTP Modules
 ============
 
 This tutorial demonstrates using the various HTTP modules available in Salt.
-These modules wrap the Python ``urllib2`` and ``requests`` libraries, extending
-them in a manner that is more consistent with Salt workflows.
+These modules wrap the Python ``tornado``, ``urllib2``, and ``requests``
+libraries, extending them in a manner that is more consistent with Salt
+workflows.
 
 The ``salt.utils.http`` Library
 -------------------------------
@@ -26,13 +29,20 @@ This library can be imported with:
 Configuring Libraries
 ~~~~~~~~~~~~~~~~~~~~~
 
-This library can make use of either ``urllib2``, which ships with Python, or
-``requests``, which can be installed separately. By default, ``urllib2`` will
-be used. In order to switch to ``requests``, set the following variable:
+This library can make use of either ``tornado``, which is required by Salt,
+``urllib2``, which ships with Python, or ``requests``, which can be installed
+separately. By default, ``tornado`` will be used. In order to switch to
+``urllib2``, set the following variable:
 
 .. code-block:: yaml
 
-    requests_lib: True
+    backend: urllib2
+
+In order to switch to ``requests``, set the following variable:
+
+.. code-block:: yaml
+
+    backend: requests
 
 This can be set in the master or minion configuration file, or passed as an
 option directly to any ``http.query()`` functions.
@@ -42,8 +52,9 @@ option directly to any ``http.query()`` functions.
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
 This function forms a basic query, but with some add-ons not present in the
-``urllib2`` and ``requests`` libraries. Not all functionality currently
-available in these libraries has been added, but can be in future iterations.
+``tornado``, ``urllib2``, and ``requests`` libraries. Not all functionality
+currently available in these libraries has been added, but can be in future
+iterations.
 
 A basic query can be performed by calling this function with no more than a
 single URL:
@@ -59,8 +70,8 @@ be overridden with the ``method`` argument:
 
     salt.utils.http.query('http://example.com/delete/url', 'DELETE')
 
-When using the ``POST`` method (and others, such ``PUT``), extra data is usually
-sent as well. This data can be either sent directly, in whatever format is
+When using the ``POST`` method (and others, such as ``PUT``), extra data is usually
+sent as well. This data can be sent directly, in whatever format is
 required by the remote server (XML, JSON, plain text, etc).
 
 .. code-block:: python
@@ -137,8 +148,8 @@ However, this can be changed to ``master`` if necessary.
     )
 
 Headers may also be passed through, either as a ``header_list``, a
-``header_dict`` or as a ``header_file``. As with the ``data_file``, the
-``header_file`` may also  be templated. Take note that because HTTP headers are
+``header_dict``, or as a ``header_file``. As with the ``data_file``, the
+``header_file`` may also be templated. Take note that because HTTP headers are
 normally syntactically-correct YAML, they will automatically be imported as an
 a Python dict.
 
@@ -224,12 +235,18 @@ of Salt's internal structure. Historically, the extension for this file is
 Return Data
 ~~~~~~~~~~~
 
-By default, ``query()`` will attempt to decode the return data. Because it was
-designed to be used with REST interfaces, it will attempt to decode the data
-received from the remote server. First it will check the ``Content-type`` header
-to try and find references to XML. If it does not find any, it will look for
-references to JSON. If it does not find any, it will fall back to plain text,
-which will not be decoded.
+.. note:: Return data encoding
+
+    If ``decode`` is set to ``True``, ``query()`` will attempt to decode the
+    return data. ``decode_type`` defaults to ``auto``.  Set it to a specific
+    encoding, ``xml``, for example, to override autodetection.
+
+Because Salt's http library was designed to be used with REST interfaces,
+``query()`` will attempt to decode the data received from the remote server
+when ``decode`` is set to ``True``.  First it will check the ``Content-type``
+header to try and find references to XML. If it does not find any, it will look
+for references to JSON. If it does not find any, it will fall back to plain
+text, which will not be decoded.
 
 JSON data is translated into a dict using Python's built-in ``json`` library.
 XML is translated using ``salt.utils.xml_util``, which will use Python's
@@ -301,12 +318,12 @@ debugging purposes, SSL verification can be turned off.
 
     salt.utils.http.query(
         'https://example.com',
-        ssl_verify=False,
+        verify_ssl=False,
     )
 
 CA Bundles
 ~~~~~~~~~~
-The ``requests`` library has its own method of detecting which CA (certficate
+The ``requests`` library has its own method of detecting which CA (certificate
 authority) bundle file to use. Usually this is implemented by the packager for
 the specific operating system distribution that you are using. However,
 ``urllib2`` requires a little more work under the hood. By default, Salt will

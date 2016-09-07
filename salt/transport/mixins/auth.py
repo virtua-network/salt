@@ -14,12 +14,15 @@ import binascii
 import salt.crypt
 import salt.payload
 import salt.master
+import salt.transport.frame
 import salt.utils.event
+import salt.ext.six as six
 from salt.utils.cache import CacheCli
 
 # Import Third Party Libs
 import tornado.gen
-from M2Crypto import RSA
+from Crypto.Cipher import PKCS1_OAEP
+from Crypto.PublicKey import RSA
 
 
 log = logging.getLogger(__name__)
@@ -37,6 +40,7 @@ class AESPubClientMixin(object):
     @tornado.gen.coroutine
     def _decode_payload(self, payload):
         # we need to decrypt it
+        log.trace('Decoding payload: {0}'.format(payload))
         if payload['enc'] == 'aes':
             self._verify_master_signature(payload)
             try:
@@ -58,10 +62,15 @@ class AESReqServerMixin(object):
         '''
         Pre-fork we need to create the zmq router device
         '''
-        salt.master.SMaster.secrets['aes'] = {'secret': multiprocessing.Array(ctypes.c_char,
-                                                            salt.crypt.Crypticle.generate_key_string()),
-                                              'reload': salt.crypt.Crypticle.generate_key_string,
-                                              }
+        if 'aes' not in salt.master.SMaster.secrets:
+            # TODO: This is still needed only for the unit tests
+            # 'tcp_test.py' and 'zeromq_test.py'. Fix that. In normal
+            # cases, 'aes' is already set in the secrets.
+            salt.master.SMaster.secrets['aes'] = {
+                'secret': multiprocessing.Array(ctypes.c_char,
+                              salt.crypt.Crypticle.generate_key_string()),
+                'reload': salt.crypt.Crypticle.generate_key_string
+            }
 
     def post_fork(self, _, __):
         self.serial = salt.payload.Serial(self.opts)
@@ -69,7 +78,7 @@ class AESReqServerMixin(object):
 
         # other things needed for _auth
         # Create the event manager
-        self.event = salt.utils.event.get_master_event(self.opts, self.opts['sock_dir'])
+        self.event = salt.utils.event.get_master_event(self.opts, self.opts['sock_dir'], listen=False)
         self.auto_key = salt.daemons.masterapi.AutoKey(self.opts)
 
         # only create a con_cache-client if the con_cache is active
@@ -95,12 +104,20 @@ class AESReqServerMixin(object):
             self.opts,
             key)
         try:
-            pub = RSA.load_pub_key(pubfn)
-        except RSA.RSAError:
+            with salt.utils.fopen(pubfn) as f:
+                pub = RSA.importKey(f.read())
+        except (ValueError, IndexError, TypeError):
             return self.crypticle.dumps({})
+        except IOError:
+            log.error('AES key not found')
+            return 'AES key not found'
 
         pret = {}
-        pret['key'] = pub.public_encrypt(key, 4)
+        cipher = PKCS1_OAEP.new(pub)
+        if six.PY2:
+            pret['key'] = cipher.encrypt(key)
+        else:
+            pret['key'] = cipher.encrypt(salt.utils.to_bytes(key))
         pret[dictkey] = pcrypt.dumps(
             ret if ret is not False else {}
         )
@@ -214,21 +231,22 @@ class AESReqServerMixin(object):
 
         elif os.path.isfile(pubfn):
             # The key has been accepted, check it
-            if salt.utils.fopen(pubfn, 'r').read() != load['pub']:
-                log.error(
-                    'Authentication attempt from {id} failed, the public '
-                    'keys did not match. This may be an attempt to compromise '
-                    'the Salt cluster.'.format(**load)
-                )
-                # put denied minion key into minions_denied
-                with salt.utils.fopen(pubfn_denied, 'w+') as fp_:
-                    fp_.write(load['pub'])
-                eload = {'result': False,
-                         'id': load['id'],
-                         'pub': load['pub']}
-                self.event.fire_event(eload, salt.utils.event.tagify(prefix='auth'))
-                return {'enc': 'clear',
-                        'load': {'ret': False}}
+            with salt.utils.fopen(pubfn, 'r') as pubfn_handle:
+                if pubfn_handle.read().strip() != load['pub'].strip():
+                    log.error(
+                        'Authentication attempt from {id} failed, the public '
+                        'keys did not match. This may be an attempt to compromise '
+                        'the Salt cluster.'.format(**load)
+                    )
+                    # put denied minion key into minions_denied
+                    with salt.utils.fopen(pubfn_denied, 'w+') as fp_:
+                        fp_.write(load['pub'])
+                    eload = {'result': False,
+                             'id': load['id'],
+                             'pub': load['pub']}
+                    self.event.fire_event(eload, salt.utils.event.tagify(prefix='auth'))
+                    return {'enc': 'clear',
+                            'load': {'ret': False}}
 
         elif not os.path.isfile(pubfn_pend):
             # The key has not been accepted, this is a new minion
@@ -300,62 +318,64 @@ class AESReqServerMixin(object):
                 # Check if the keys are the same and error out if this is the
                 # case. Otherwise log the fact that the minion is still
                 # pending.
-                if salt.utils.fopen(pubfn_pend, 'r').read() != load['pub']:
-                    log.error(
-                        'Authentication attempt from {id} failed, the public '
-                        'key in pending did not match. This may be an '
-                        'attempt to compromise the Salt cluster.'
-                        .format(**load)
-                    )
-                    # put denied minion key into minions_denied
-                    with salt.utils.fopen(pubfn_denied, 'w+') as fp_:
-                        fp_.write(load['pub'])
-                    eload = {'result': False,
-                             'id': load['id'],
-                             'pub': load['pub']}
-                    self.event.fire_event(eload, salt.utils.event.tagify(prefix='auth'))
-                    return {'enc': 'clear',
-                            'load': {'ret': False}}
-                else:
-                    log.info(
-                        'Authentication failed from host {id}, the key is in '
-                        'pending and needs to be accepted with salt-key '
-                        '-a {id}'.format(**load)
-                    )
-                    eload = {'result': True,
-                             'act': 'pend',
-                             'id': load['id'],
-                             'pub': load['pub']}
-                    self.event.fire_event(eload, salt.utils.event.tagify(prefix='auth'))
-                    return {'enc': 'clear',
-                            'load': {'ret': True}}
+                with salt.utils.fopen(pubfn_pend, 'r') as pubfn_handle:
+                    if pubfn_handle.read() != load['pub']:
+                        log.error(
+                            'Authentication attempt from {id} failed, the public '
+                            'key in pending did not match. This may be an '
+                            'attempt to compromise the Salt cluster.'
+                            .format(**load)
+                        )
+                        # put denied minion key into minions_denied
+                        with salt.utils.fopen(pubfn_denied, 'w+') as fp_:
+                            fp_.write(load['pub'])
+                        eload = {'result': False,
+                                 'id': load['id'],
+                                 'pub': load['pub']}
+                        self.event.fire_event(eload, salt.utils.event.tagify(prefix='auth'))
+                        return {'enc': 'clear',
+                                'load': {'ret': False}}
+                    else:
+                        log.info(
+                            'Authentication failed from host {id}, the key is in '
+                            'pending and needs to be accepted with salt-key '
+                            '-a {id}'.format(**load)
+                        )
+                        eload = {'result': True,
+                                 'act': 'pend',
+                                 'id': load['id'],
+                                 'pub': load['pub']}
+                        self.event.fire_event(eload, salt.utils.event.tagify(prefix='auth'))
+                        return {'enc': 'clear',
+                                'load': {'ret': True}}
             else:
                 # This key is in pending and has been configured to be
                 # auto-signed. Check to see if it is the same key, and if
                 # so, pass on doing anything here, and let it get automatically
                 # accepted below.
-                if salt.utils.fopen(pubfn_pend, 'r').read() != load['pub']:
-                    log.error(
-                        'Authentication attempt from {id} failed, the public '
-                        'keys in pending did not match. This may be an '
-                        'attempt to compromise the Salt cluster.'
-                        .format(**load)
-                    )
-                    # put denied minion key into minions_denied
-                    with salt.utils.fopen(pubfn_denied, 'w+') as fp_:
-                        fp_.write(load['pub'])
-                    eload = {'result': False,
-                             'id': load['id'],
-                             'pub': load['pub']}
-                    self.event.fire_event(eload, salt.utils.event.tagify(prefix='auth'))
-                    return {'enc': 'clear',
-                            'load': {'ret': False}}
-                else:
-                    pass
+                with salt.utils.fopen(pubfn_pend, 'r') as pubfn_handle:
+                    if pubfn_handle.read() != load['pub']:
+                        log.error(
+                            'Authentication attempt from {id} failed, the public '
+                            'keys in pending did not match. This may be an '
+                            'attempt to compromise the Salt cluster.'
+                            .format(**load)
+                        )
+                        # put denied minion key into minions_denied
+                        with salt.utils.fopen(pubfn_denied, 'w+') as fp_:
+                            fp_.write(load['pub'])
+                        eload = {'result': False,
+                                 'id': load['id'],
+                                 'pub': load['pub']}
+                        self.event.fire_event(eload, salt.utils.event.tagify(prefix='auth'))
+                        return {'enc': 'clear',
+                                'load': {'ret': False}}
+                    else:
+                        pass
 
         else:
             # Something happened that I have not accounted for, FAIL!
-            log.warn('Unaccounted for authentication failure')
+            log.warning('Unaccounted for authentication failure')
             eload = {'result': False,
                      'id': load['id'],
                      'pub': load['pub']}
@@ -388,12 +408,14 @@ class AESReqServerMixin(object):
         # The key payload may sometimes be corrupt when using auto-accept
         # and an empty request comes in
         try:
-            pub = RSA.load_pub_key(pubfn)
-        except RSA.RSAError as err:
+            with salt.utils.fopen(pubfn) as f:
+                pub = RSA.importKey(f.read())
+        except (ValueError, IndexError, TypeError) as err:
             log.error('Corrupt public key "{0}": {1}'.format(pubfn, err))
             return {'enc': 'clear',
                     'load': {'ret': False}}
 
+        cipher = PKCS1_OAEP.new(pub)
         ret = {'enc': 'pub',
                'pub_key': self.master_key.get_pub_str(),
                'publish_port': self.opts['publish_port']}
@@ -414,10 +436,11 @@ class AESReqServerMixin(object):
                                                    ret['pub_key'])
                 ret.update({'pub_sig': binascii.b2a_base64(pub_sign)})
 
+        mcipher = PKCS1_OAEP.new(self.master_key.key)
         if self.opts['auth_mode'] >= 2:
             if 'token' in load:
                 try:
-                    mtoken = self.master_key.key.private_decrypt(load['token'], 4)
+                    mtoken = mcipher.decrypt(load['token'])
                     aes = '{0}_|-{1}'.format(salt.master.SMaster.secrets['aes']['secret'].value, mtoken)
                 except Exception:
                     # Token failed to decrypt, send back the salty bacon to
@@ -426,24 +449,22 @@ class AESReqServerMixin(object):
             else:
                 aes = salt.master.SMaster.secrets['aes']['secret'].value
 
-            ret['aes'] = pub.public_encrypt(aes, 4)
+            ret['aes'] = cipher.encrypt(aes)
         else:
             if 'token' in load:
                 try:
-                    mtoken = self.master_key.key.private_decrypt(
-                        load['token'], 4
-                    )
-                    ret['token'] = pub.public_encrypt(mtoken, 4)
+                    mtoken = mcipher.decrypt(load['token'])
+                    ret['token'] = cipher.encrypt(mtoken)
                 except Exception:
                     # Token failed to decrypt, send back the salty bacon to
                     # support older minions
                     pass
 
             aes = salt.master.SMaster.secrets['aes']['secret'].value
-            ret['aes'] = pub.public_encrypt(salt.master.SMaster.secrets['aes']['secret'].value, 4)
+            ret['aes'] = cipher.encrypt(salt.master.SMaster.secrets['aes']['secret'].value)
         # Be aggressive about the signature
         digest = hashlib.sha256(aes).hexdigest()
-        ret['sig'] = self.master_key.key.private_encrypt(digest, 5)
+        ret['sig'] = salt.crypt.private_encrypt(self.master_key.key, digest)
         eload = {'result': True,
                  'act': 'accept',
                  'id': load['id'],

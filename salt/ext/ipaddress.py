@@ -15,12 +15,21 @@ Source: https://bitbucket.org/kwi/py2-ipaddress/
 from itertools import imap as map
 range = xrange
 
+# Except that xrange only supports machine integers, not longs, so...
+def long_range(start, end):
+    while start < end:
+        yield start
+        start += 1
+
 # This backport uses bytearray instead of bytes, as bytes is the same
 # as str in Python 2.7.
 bytes = bytearray
 
 # Python 2 does not support exception chaining.
 # s/ from None$//
+
+# Python 2 ranges need to fit in a C long
+# 'fix' hosts() for IPv6Network
 
 # When checking for instances of int, also allow Python 2's long.
 _builtin_isinstance = isinstance
@@ -496,6 +505,17 @@ class _IPAddressBase(_TotalOrderingMixin):
         return str(self)
 
     @property
+    def reverse_pointer(self):
+        """The name of the reverse DNS pointer for the IP address, e.g.:
+            >>> ipaddress.ip_address("127.0.0.1").reverse_pointer
+            '1.0.0.127.in-addr.arpa'
+            >>> ipaddress.ip_address("2001:db8::1").reverse_pointer
+            '1.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.8.b.d.0.1.0.0.2.ip6.arpa'
+
+        """
+        return self._reverse_pointer()
+
+    @property
     def version(self):
         msg = '%200s has no version specified' % (type(self),)
         raise NotImplementedError(msg)
@@ -532,7 +552,7 @@ class _IPAddressBase(_TotalOrderingMixin):
         """Return prefix length from the bitwise netmask.
 
         Args:
-            ip_int: An integer, the netmask in axpanded bitwise format
+            ip_int: An integer, the netmask in expanded bitwise format
 
         Returns:
             An integer, the prefix length.
@@ -699,13 +719,13 @@ class _BaseNetwork(_IPAddressBase):
         """
         network = int(self.network_address)
         broadcast = int(self.broadcast_address)
-        for x in range(network + 1, broadcast):
+        for x in long_range(network + 1, broadcast):
             yield self._address_class(x)
 
     def __iter__(self):
         network = int(self.network_address)
         broadcast = int(self.broadcast_address)
-        for x in range(network, broadcast + 1):
+        for x in long_range(network, broadcast + 1):
             yield self._address_class(x)
 
     def __getitem__(self, n):
@@ -1281,6 +1301,15 @@ class _BaseV4(object):
             return True
         return False
 
+    def _reverse_pointer(self):
+        """Return the reverse DNS pointer name for the IPv4 address.
+
+        This implements the method described in RFC1035 3.5.
+
+        """
+        reverse_octets = str(self).split('.')[::-1]
+        return '.'.join(reverse_octets) + '.in-addr.arpa'
+
     @property
     def max_prefixlen(self):
         return self._max_prefixlen
@@ -1842,6 +1871,15 @@ class _BaseV6(object):
             return '%s/%d' % (':'.join(parts), self._prefixlen)
         return ':'.join(parts)
 
+    def _reverse_pointer(self):
+        """Return the reverse DNS pointer name for the IPv6 address.
+
+        This implements the method described in RFC3596 2.5.
+
+        """
+        reverse_chars = self.exploded[::-1].replace(':', '')
+        return '.'.join(reverse_chars) + '.ip6.arpa'
+
     @property
     def max_prefixlen(self):
         return self._max_prefixlen
@@ -2211,6 +2249,18 @@ class IPv6Network(_BaseV6, _BaseNetwork):
 
         if self._prefixlen == (self._max_prefixlen - 1):
             self.hosts = self.__iter__
+
+    def hosts(self):
+        """Generate Iterator over usable hosts in a network.
+
+          This is like __iter__ except it doesn't return the
+          Subnet-Router anycast address.
+
+        """
+        network = int(self.network_address)
+        broadcast = int(self.broadcast_address)
+        for x in range(1, broadcast - network + 1):
+            yield self._address_class(network + x)
 
     @property
     def is_site_local(self):

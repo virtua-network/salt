@@ -115,6 +115,12 @@ class LoaderGlobalsTest(integration.ModuleCase):
         '''
         self._verify_globals(salt.loader.outputters(self.master_opts))
 
+    def test_serializers(self):
+        '''
+        Test that serializers have: []
+        '''
+        self._verify_globals(salt.loader.serializers(self.master_opts))
+
     def test_states(self):
         '''
         Test that states:
@@ -124,7 +130,7 @@ class LoaderGlobalsTest(integration.ModuleCase):
             - __grains__
             - __context__
         '''
-        self._verify_globals(salt.loader.states(self.master_opts, {}))
+        self._verify_globals(salt.loader.states(self.master_opts, {}, {}, {}))
 
     def test_renderers(self):
         '''

@@ -6,12 +6,12 @@ minion modules.
 
 # Import python libs
 from __future__ import absolute_import, print_function
+
 import os
 import sys
 import time
 import logging
 import traceback
-import multiprocessing
 
 # Import salt libs
 import salt
@@ -22,16 +22,24 @@ import salt.payload
 import salt.transport
 import salt.utils.args
 import salt.utils.jid
+import salt.utils.minion
 import salt.defaults.exitcodes
 from salt.log import LOG_LEVELS
+from salt.utils import is_windows
 from salt.utils import print_cli
 from salt.utils import kinds
+from salt.utils import activate_profile
+from salt.utils import output_profile
+from salt.utils.process import MultiprocessingProcess
 from salt.cli import daemons
 
 try:
     from raet import raeting, nacling
     from raet.lane.stacking import LaneStack
     from raet.lane.yarding import RemoteYard, Yard
+
+    if is_windows():
+        import win32file
 
 except ImportError:
     # Don't die on missing transport libs since only one transport is required
@@ -67,7 +75,7 @@ class Caller(object):
             ttype = opts['pillar']['master']['transport']
 
         # switch on available ttypes
-        if ttype in ('zeromq', 'tcp'):
+        if ttype in ('zeromq', 'tcp', 'detect'):
             return ZeroMQCaller(opts, **kwargs)
         elif ttype == 'raet':
             return RAETCaller(opts, **kwargs)
@@ -119,8 +127,16 @@ class BaseCaller(object):
         '''
         Execute the salt call logic
         '''
+        profiling_enabled = self.opts.get('profiling_enabled', False)
         try:
-            ret = self.call()
+            pr = activate_profile(profiling_enabled)
+            try:
+                ret = self.call()
+            finally:
+                output_profile(pr,
+                               stats_path=self.opts.get('profiling_path',
+                                                        '/tmp/stats'),
+                               stop=True)
             out = ret.get('out', 'nested')
             if self.opts['metadata']:
                 print_ret = ret
@@ -214,7 +230,8 @@ class BaseCaller(object):
             if isinstance(oput, six.string_types):
                 ret['out'] = oput
         is_local = self.opts['local'] or self.opts.get(
-            'file_client', False) == 'local'
+            'file_client', False) == 'local' or self.opts.get(
+            'master_type') == 'disable'
         returners = self.opts.get('return', '').split(',')
         if (not is_local) or returners:
             ret['id'] = self.opts['id']
@@ -231,7 +248,6 @@ class BaseCaller(object):
                 pass
 
         # return the job infos back up to the respective minion's master
-
         if not is_local:
             try:
                 mret = ret.copy()
@@ -239,6 +255,10 @@ class BaseCaller(object):
                 self.return_pub(mret)
             except Exception:
                 pass
+        elif self.opts['cache_jobs']:
+            # Local job cache has been enabled
+            salt.utils.minion.cache_jobs(self.opts, ret['jid'], ret)
+
         # close raet channel here
         return ret
 
@@ -262,6 +282,16 @@ class ZeroMQCaller(BaseCaller):
         for key, value in six.iteritems(ret):
             load[key] = value
         channel.send(load)
+
+
+def raet_minion_run(cleanup_protecteds):
+    '''
+    Set up the minion caller. Should be run in its own process.
+    This function is intentionally left out of RAETCaller. This will avoid
+    needing to pickle the RAETCaller object on Windows.
+    '''
+    minion = daemons.Minion()  # daemonizes here
+    minion.call(cleanup_protecteds=cleanup_protecteds)  # caller minion.call_in uses caller.flo
 
 
 class RAETCaller(BaseCaller):
@@ -301,17 +331,13 @@ class RAETCaller(BaseCaller):
             if (opts.get('__role') ==
                     kinds.APPL_KIND_NAMES[kinds.applKinds.caller]):
                 # spin up and fork minion here
-                self.process = multiprocessing.Process(target=self.minion_run,
+                self.process = MultiprocessingProcess(target=raet_minion_run,
                                     kwargs={'cleanup_protecteds': [self.stack.ha], })
                 self.process.start()
                 # wait here until '/var/run/salt/minion/alpha_caller.manor.uxd' exists
                 self._wait_caller(opts)
 
         super(RAETCaller, self).__init__(opts)
-
-    def minion_run(self, cleanup_protecteds):
-        minion = daemons.Minion()  # daemonizes here
-        minion.call(cleanup_protecteds=cleanup_protecteds)  # caller minion.call_in uses caller.flo
 
     def run(self):
         '''
@@ -408,8 +434,27 @@ class RAETCaller(BaseCaller):
 
         ha, dirpath = Yard.computeHa(dirpath, lanename, yardname)
 
-        while not ((os.path.exists(ha) and
-                    not os.path.isfile(ha) and
-                    not os.path.isdir(ha))):
-            time.sleep(0.1)
+        if is_windows():
+            # RAET lanes do not use files on Windows. Need to use win32file
+            # API to check for existence.
+            exists = False
+            while not exists:
+                try:
+                    f = win32file.CreateFile(
+                            ha,
+                            win32file.GENERIC_WRITE | win32file.GENERIC_READ,
+                            win32file.FILE_SHARE_READ,
+                            None,
+                            win32file.OPEN_EXISTING,
+                            0,
+                            None)
+                    win32file.CloseHandle(f)
+                    exists = True
+                except win32file.error:
+                    time.sleep(0.1)
+        else:
+            while not ((os.path.exists(ha) and
+                        not os.path.isfile(ha) and
+                        not os.path.isdir(ha))):
+                time.sleep(0.1)
         time.sleep(0.5)

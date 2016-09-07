@@ -37,7 +37,7 @@ from salt.pillar import Pillar, git_pillar
 
 
 @skipIf(NO_MOCK, NO_MOCK_REASON)
-@skipIf(not git_pillar.HAS_GIT, 'no GitPython')
+@skipIf(not git_pillar.HAS_GITPYTHON, 'no GitPython')
 class GitPillarTestCase(TestCase, integration.AdaptedConfigurationTestCaseMixIn):
     'test git_pillar pillar'
     maxDiff = None
@@ -51,13 +51,17 @@ class GitPillarTestCase(TestCase, integration.AdaptedConfigurationTestCaseMixIn)
         git_pillar.__opts__ = {
                 'cachedir': cachedir,
                 'pillar_roots': {},
+                'hash_type': 'sha256',
                 'file_roots': {},
                 'state_top': 'top.sls',
                 'extension_modules': '',
                 'renderer': 'yaml_jinja',
+                'renderer_blacklist': [],
+                'renderer_whitelist': [],
                 'pillar_opts': False
                 }
         git_pillar.__grains__ = {}
+        git_pillar._update('master', 'file://{0}'.format(self.repo_path))
 
     def tearDown(self):
         shutil.rmtree(self.tmpdir)
@@ -108,7 +112,7 @@ class GitPillarTestCase(TestCase, integration.AdaptedConfigurationTestCaseMixIn)
         ]
         pil = Pillar(git_pillar.__opts__,
                      git_pillar.__grains__,
-                     'myminon', None)
+                     'myminion', None)
         self.assertEqual(PILLAR_CONTENT, pil.compile_pillar(pillar_dirs={}))
 
     def test_no_loop(self):
@@ -119,7 +123,7 @@ class GitPillarTestCase(TestCase, integration.AdaptedConfigurationTestCaseMixIn)
         Namely, we replace the main ``ext_pillar`` entry function by one
         that keeps count of its calls.
 
-        Otherwise, the fact that the :class:`MaximumRecursion` error is catched
+        Otherwise, the fact that the :class:`MaximumRecursion` error is caught
         can go in the way on the testing.
 
         On the current code base, this test fails if the two first lines of
@@ -146,10 +150,11 @@ class GitPillarTestCase(TestCase, integration.AdaptedConfigurationTestCaseMixIn)
             dict(git=self.conf_line),
             dict(git=conf_line2),
         ]
+        git_pillar._update(*conf_line2.split(None, 1))
 
         pil = Pillar(git_pillar.__opts__,
                      git_pillar.__grains__,
-                     'myminon', 'base')
+                     'myminion', 'base')
 
         orig_ext_pillar = pil.ext_pillars['git']
         orig_ext_pillar.count = 0
@@ -169,10 +174,13 @@ class GitPillarTestCase(TestCase, integration.AdaptedConfigurationTestCaseMixIn)
             if key == 'git.ext_pillar':
                 return ext_pillar_count_calls
             return orig_getitem(self, key)
-        LazyLoader.__getitem__ = __getitem__
 
-        self.assertEqual(PILLAR_CONTENT, pil.compile_pillar(pillar_dirs={}))
-        self.assertTrue(orig_ext_pillar.count < 7)
+        try:
+            LazyLoader.__getitem__ = __getitem__
+            self.assertEqual(PILLAR_CONTENT, pil.compile_pillar(pillar_dirs={}))
+            self.assertTrue(orig_ext_pillar.count < 7)
+        finally:
+            LazyLoader.__getitem__ = orig_getitem
 
 
 if __name__ == '__main__':

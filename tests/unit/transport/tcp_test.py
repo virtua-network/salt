@@ -13,13 +13,14 @@ import tornado.ioloop
 from tornado.testing import AsyncTestCase
 
 import salt.config
+import salt.ext.six as six
 import salt.utils
 import salt.transport.server
 import salt.transport.client
 import salt.exceptions
 
 # Import Salt Testing libs
-from salttesting import TestCase
+from salttesting import TestCase, skipIf
 from salttesting.helpers import ensure_in_syspath
 ensure_in_syspath('../')
 import integration
@@ -40,6 +41,8 @@ class BaseTCPReqCase(TestCase):
     '''
     @classmethod
     def setUpClass(cls):
+        if not hasattr(cls, '_handle_payload'):
+            return
         cls.master_opts = salt.config.master_config(get_config_file_path('master'))
         cls.master_opts.update({
             'transport': 'tcp',
@@ -58,6 +61,7 @@ class BaseTCPReqCase(TestCase):
         cls.server_channel.pre_fork(cls.process_manager)
 
         cls.io_loop = tornado.ioloop.IOLoop()
+        cls.io_loop.make_current()
         cls.server_channel.post_fork(cls._handle_payload, io_loop=cls.io_loop)
 
         cls.server_thread = threading.Thread(target=cls.io_loop.start)
@@ -66,6 +70,8 @@ class BaseTCPReqCase(TestCase):
 
     @classmethod
     def tearDownClass(cls):
+        if not hasattr(cls, '_handle_payload'):
+            return
         cls.io_loop.stop()
         cls.server_thread.join()
         cls.process_manager.kill_children()
@@ -73,6 +79,7 @@ class BaseTCPReqCase(TestCase):
         del cls.server_channel
 
 
+@skipIf(salt.utils.is_darwin(), 'hanging test suite on MacOS')
 class ClearReqTestCases(BaseTCPReqCase, ReqChannelMixin):
     '''
     Test all of the clear msg stuff
@@ -89,6 +96,7 @@ class ClearReqTestCases(BaseTCPReqCase, ReqChannelMixin):
         raise tornado.gen.Return((payload, {'fun': 'send_clear'}))
 
 
+@skipIf(salt.utils.is_darwin(), 'hanging test suite on MacOS')
 class AESReqTestCases(BaseTCPReqCase, ReqChannelMixin):
     def setUp(self):
         self.channel = salt.transport.client.ReqChannel.factory(self.minion_opts)
@@ -170,13 +178,14 @@ class BaseTCPPubCase(AsyncTestCase):
     def tearDown(self):
         super(BaseTCPPubCase, self).tearDown()
         failures = []
-        for k, v in self.io_loop._handlers.iteritems():
+        for k, v in six.iteritems(self.io_loop._handlers):
             if self._start_handlers.get(k) != v:
                 failures.append((k, v))
         if len(failures) > 0:
             raise Exception('FDs still attached to the IOLoop: {0}'.format(failures))
 
 
+@skipIf(True, 'Skip until we can devote time to fix this test')
 class AsyncPubChannelTest(BaseTCPPubCase, PubChannelMixin):
     '''
     Tests around the publish system

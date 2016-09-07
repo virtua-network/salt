@@ -50,6 +50,7 @@ class TestSaltAPIHandler(SaltnadoTestCase):
         response_obj = json.loads(response.body)
         self.assertEqual(response_obj['clients'],
                          ['runner',
+                          'runner_async',
                           'local_async',
                           'local',
                           'local_batch']
@@ -77,6 +78,7 @@ class TestSaltAPIHandler(SaltnadoTestCase):
         self.assertEqual(response.headers['Location'], '/login')
 
     # Local client tests
+    @skipIf(True, 'to be reenabled when #23623 is merged')
     def test_simple_local_post(self):
         '''
         Test a basic API of /
@@ -115,7 +117,43 @@ class TestSaltAPIHandler(SaltnadoTestCase):
         response_obj = json.loads(response.body)
         self.assertEqual(response_obj['return'], ["No minions matched the target. No command was sent, no jid was assigned."])
 
+    # local client request body test
+    def test_simple_local_post_only_dictionary_request(self):
+        '''
+        Test a basic API of /
+        '''
+        low = {'client': 'local',
+                'tgt': '*',
+                'fun': 'test.ping',
+              }
+        response = self.fetch('/',
+                              method='POST',
+                              body=json.dumps(low),
+                              headers={'Content-Type': self.content_type_map['json'],
+                                       saltnado.AUTH_TOKEN_HEADER: self.token['token']},
+                              connect_timeout=30,
+                              request_timeout=30,
+                              )
+        response_obj = json.loads(response.body)
+        self.assertEqual(response_obj['return'], [{'minion': True, 'sub_minion': True}])
+
+    def test_simple_local_post_invalid_request(self):
+        '''
+        Test a basic API of /
+        '''
+        low = ["invalid request"]
+        response = self.fetch('/',
+                              method='POST',
+                              body=json.dumps(low),
+                              headers={'Content-Type': self.content_type_map['json'],
+                                       saltnado.AUTH_TOKEN_HEADER: self.token['token']},
+                              connect_timeout=30,
+                              request_timeout=30,
+                              )
+        self.assertEqual(response.code, 400)
+
     # local_batch tests
+    @skipIf(True, 'to be reenabled when #23623 is merged')
     def test_simple_local_batch_post(self):
         '''
         Basic post against local_batch
@@ -136,6 +174,7 @@ class TestSaltAPIHandler(SaltnadoTestCase):
         self.assertEqual(response_obj['return'], [{'minion': True, 'sub_minion': True}])
 
     # local_batch tests
+    @skipIf(True, 'to be reenabled when #23623 is merged')
     def test_full_local_batch_post(self):
         '''
         Test full parallelism of local_batch
@@ -290,6 +329,25 @@ class TestSaltAPIHandler(SaltnadoTestCase):
         self.assertEqual(len(response_obj['return']), 1)
         self.assertEqual(set(response_obj['return'][0]), set(['minion', 'sub_minion']))
 
+    # runner_async tests
+    def test_simple_local_runner_async_post(self):
+        low = [{'client': 'runner_async',
+                'fun': 'manage.up',
+                }]
+        response = self.fetch('/',
+                              method='POST',
+                              body=json.dumps(low),
+                              headers={'Content-Type': self.content_type_map['json'],
+                                       saltnado.AUTH_TOKEN_HEADER: self.token['token']},
+                              connect_timeout=10,
+                              request_timeout=10,
+                              )
+        response_obj = json.loads(response.body)
+        self.assertIn('return', response_obj)
+        self.assertEqual(1, len(response_obj['return']))
+        self.assertIn('jid', response_obj['return'][0])
+        self.assertIn('tag', response_obj['return'][0])
+
 
 @skipIf(HAS_ZMQ_IOLOOP is False, 'PyZMQ version must be >= 14.0.1 to run these tests.')
 class TestMinionSaltAPIHandler(SaltnadoTestCase):
@@ -301,6 +359,7 @@ class TestMinionSaltAPIHandler(SaltnadoTestCase):
         application.event_listener = saltnado.EventListener({}, self.opts)
         return application
 
+    @skipIf(True, 'issue #34753')
     def test_get_no_mid(self):
         response = self.fetch('/minions',
                               method='GET',
@@ -315,6 +374,7 @@ class TestMinionSaltAPIHandler(SaltnadoTestCase):
         for minion_id, grains in six.iteritems(response_obj['return'][0]):
             self.assertEqual(minion_id, grains['id'])
 
+    @skipIf(True, 'to be reenabled when #23623 is merged')
     def test_get(self):
         response = self.fetch('/minions/minion',
                               method='GET',
@@ -398,6 +458,7 @@ class TestJobsSaltAPIHandler(SaltnadoTestCase):
         application.event_listener = saltnado.EventListener({}, self.opts)
         return application
 
+    @skipIf(True, 'to be reenabled when #23623 is merged')
     def test_get(self):
         # test with no JID
         self.http_client.fetch(self.get_url('/jobs'),
@@ -450,6 +511,7 @@ class TestRunSaltAPIHandler(SaltnadoTestCase):
         application.event_listener = saltnado.EventListener({}, self.opts)
         return application
 
+    @skipIf(True, 'to be reenabled when #23623 is merged')
     def test_get(self):
         low = [{'client': 'local',
                 'tgt': '*',
@@ -534,6 +596,7 @@ class TestWebhookSaltAPIHandler(SaltnadoTestCase):
             self.assertIn('headers', event['data'])
             self.assertEqual(event['data']['post'], {'foo': 'bar'})
         # get an event future
+        self._finished = False  # TODO: remove after some cleanup of the event listener
         event = self.application.event_listener.get_event(self,
                                                           tag='salt/netapi/hook',
                                                           callback=verify_event,

@@ -1,4 +1,434 @@
 -------------------------------------------------------------------
+Thu Oct 15 09:43:16 UTC 2015 - mrueckert@suse.de
+
+- update to 2015.8.1
+  - Add support for ``spm.d/*.conf`` configuration of SPM
+    (:issue:`27010`)
+  - Fix ``proxy`` grains breakage for non-proxy minions
+    (:issue:`27039`)
+  - Fix global key management for git state
+  - Fix passing http auth to ``util.http`` from ``state.file``
+    (:issue:`21917`)
+  - Fix ``multiprocessing: True`` in windows (on by default`)
+  - Add ``pkg.info`` to pkg modules
+  - Fix name of ``serial`` grain (this was accidentally renamed in
+    2015.8.0`)
+  - Merge config values from ``master.d``/``minion.d`` conf files
+    (rather than flat update`)
+  - Clean grains cache on grains sync (:issue:`19853`)
+  - Remove streamed response for fileclient to avoid HTTP
+    redirection problems (:issue:`27093`)
+  - Fixed incorrect warning about ``osrelease`` grain
+    (:issue:`27065`)
+  - Fix authentication via Salt-API with tokens (:issue:`27270`)
+  - Fix winrepo downloads from https locations (:issue:`27081`)
+  - Fix potential error with salt-call as non-root user
+    (:issue:`26889`)
+  - Fix global minion provider overrides (:issue:`27209`)
+  - Fix backward compatibility issues for pecl modules
+  - Fix Windows uninstaller to only remove ``./bin``, ``salt*``,
+    ``nssm.exe``, ``uninst.exe`` (:issue:`27383`)
+  - Fix misc issues with mongo returner.
+  - Add sudo option to cloud config files (:issue:`27398`)
+  - Fix regression in RunnerClient argument handling
+    (:issue:`25107`)
+  - Fix ``dockerng.running`` replacing creation hostconfig with
+    runtime hostconfig (:issue:`27265`)
+  - Fix dockerng.running replacing creation hostconfig with runtime
+    hostconfig (:issue:`27265`)
+  - Increased performance on boto asg/elb states due to
+    ``__states__`` integration
+  - Windows minion no longer requires powershell to restart
+    (:issue:`26629`)
+  - Fix x509 module to support recent versions of OpenSSL
+    (:issue:`27326`)
+  - Some issues with proxy minions were corrected.
+- drop salt-2015.8-backports-susemanager.diff: included in update
+- guard raet buildrequires with bcond_with raet and comment out the
+  recommends for salt-raet.
+
+-------------------------------------------------------------------
+Mon Oct 12 10:11:33 UTC 2015 - tampakrap@opensuse.org
+
+- remove pygit2 global recommends, it is only needed in the master
+- remove git-core, pygit2 should pull it as a dependency
+- add a (currently disabled) %check
+
+-------------------------------------------------------------------
+Mon Oct 12 10:08:57 UTC 2015 - toddrme2178@gmail.com
+
+- Add salt-2015.8-backports-susemanager.diff
+  Returns detailed information about a package
+
+-------------------------------------------------------------------
+Mon Oct 12 08:48:25 UTC 2015 - dmacvicar@suse.de
+
+- ifdef Recommends to build on RHEL based distros
+- use _initddir instead of _sysconfdir/init.d as
+  it works on both platforms.
+
+-------------------------------------------------------------------
+Mon Oct 12 08:19:45 UTC 2015 - dmacvicar@suse.de
+
+- allow to disable docs in preparation for building
+  on other platforms without all dependencies.
+
+-------------------------------------------------------------------
+Mon Oct 12 08:07:01 UTC 2015 - dmacvicar@suse.de
+
+- python-libnacl, python-ioflo are _not_ required to build the
+  package. They are anyways requires of python-raet, which is
+  also not required to build the package.
+
+-------------------------------------------------------------------
+Sat Oct 10 00:00:39 UTC 2015 - mrueckert@suse.de
+
+- merge (build)requires/recommends with requirements/*txt and
+  setup.py
+
+-------------------------------------------------------------------
+Fri Oct  9 23:35:05 UTC 2015 - mrueckert@suse.de
+
+- add raet subpackage which will pull all requires for it and
+  provides config snippets to enable it for the minion and master.
+
+-------------------------------------------------------------------
+Fri Oct  9 15:34:16 UTC 2015 - mrueckert@suse.de
+
+- add tmpfiles.d file
+
+-------------------------------------------------------------------
+Fri Oct  9 14:12:39 UTC 2015 - dmacvicar@suse.de
+
+- Remove requires on python-ioflo and python-libnacl
+  they will be pulled by python-raet,
+  which is optional.
+
+-------------------------------------------------------------------
+Fri Oct  9 12:12:48 UTC 2015 - dmacvicar@suse.de
+
+- python-raet is optional, so make it a Recommends
+
+-------------------------------------------------------------------
+Fri Oct  9 12:04:03 UTC 2015 - dmacvicar@suse.de
+
+- update backports patch from 2015.8 branch
+
+-------------------------------------------------------------------
+Wed Oct  7 20:06:19 UTC 2015 - mrueckert@suse.de
+
+- update use-forking-daemon.patch:
+  the original intention was to get rid of the python systemd
+  dependency. for this we do not have daemonize the whole process.
+  just switching to simple mode is enough.
+
+-------------------------------------------------------------------
+Wed Oct  7 19:15:54 UTC 2015 - mrueckert@suse.de
+
+- drop fdupes:
+  1. it broke python byte code handling
+  2. the only part of the package which would really benefit from
+     it would be the doc package. but given we only install the
+     files via %doc, we can not use it for that either.
+- reenable completions on distros newer than sle11
+- do not use _datarootdir, use _datadir instead.
+
+-------------------------------------------------------------------
+Wed Oct  7 14:34:18 UTC 2015 - mrueckert@suse.de
+
+- package all directories in /var/cache/salt and /etc/salt and 
+  have permissions set for non root salt master
+- update use-salt-user-for-master.patch:
+  - also patch the logrotate file to include the su option
+
+-------------------------------------------------------------------
+Tue Oct  6 12:27:49 UTC 2015 - mrueckert@suse.de
+
+- remove duplicated recommends
+- never require pygit2 and git. the master can run fine without.
+  always use recommends
+
+-------------------------------------------------------------------
+Tue Oct  6 11:36:13 UTC 2015 - tampakrap@opensuse.org
+
+- cleanup dependencies:
+  - remove a lot of unneeded buildrequires
+  - fdupes not present on SLE10
+  - python-certifi needed on SLE11
+  - python-zypp not needed any more
+  - python-pygit2 is not a global requirement
+  - convert python-pysqlite to recommends as it is not available on python <=2.7
+- sles_version -> suse_version
+- %exclude the cloud/deploy/*.sh scripts to fix build issue on SLE11
+
+-------------------------------------------------------------------
+Mon Oct  5 12:44:40 UTC 2015 - tampakrap@opensuse.org
+
+- Remove python-PyYAML from the dependencies list, as python-yaml is the same
+- Build the -completion subpackages in SLE11 as well
+- Add salt-proxy (by dmacvicar@suse.de)
+- Create salt user/group only in the -master subpkg
+
+-------------------------------------------------------------------
+Sat Oct  3 17:37:20 UTC 2015 - infroma@gmail.com
+
+- Fix typo in use-forking-daemon.patch, that prevented daemon loading
+
+-------------------------------------------------------------------
+Thu Oct  1 08:13:58 UTC 2015 - toddrme2178@gmail.com
+
+- Fix typo in Requires
+
+-------------------------------------------------------------------
+Tue Sep 29 09:11:38 UTC 2015 - toddrme2178@gmail.com
+
+- Cleanup requirements
+
+-------------------------------------------------------------------
+Wed Sep 23 18:06:52 UTC 2015 - aboe76@gmail.com
+
+- New Major release 2015.8.0
+
+  for more details:
+  http://docs.saltstack.com/en/latest/topics/releases/2015.8.0.html
+
+- Cleaned the spec file with spec-cleaner
+- Added the use-salt-user-for-master.patch see README.SUSE
+- Updated the files ownership with salt user
+- removed m2crypto depency
+
+-------------------------------------------------------------------
+Tue Sep 22 11:51:50 UTC 2015 - infroma@gmail.com
+
+- Removed fish dependency for fish completions.
+
+-------------------------------------------------------------------
+Tue Sep 22 11:12:47 UTC 2015 - infroma@gmail.com
+
+- Added fish completions.
+
+-------------------------------------------------------------------
+Mon Sep 21 08:58:31 UTC 2015 - tampakrap@opensuse.org
+
+- Support SLE11SP{3,4}, where the M2Crypto package is named python-m2crypto
+
+-------------------------------------------------------------------
+Tue Aug 18 06:58:18 UTC 2015 - aboe76@gmail.com
+
+- Updated to Bugfix release 2015.5
+
+  for more details:
+  https://github.com/saltstack/salt/blob/develop/doc/topics/releases/2015.5.5.rst
+
+- Add prereq, for user creation.
+- Add creation of salt user in preparation of running the salt-master daemon
+  as non-root user salt.
+  https://bugzilla.opensuse.org/show_bug.cgi?id=939831
+- Add README.SUSE with explanation and how to.
+
+-------------------------------------------------------------------
+Mon Jul 20 12:22:26 UTC 2015 - bwiedemann@suse.com
+
+- only require git-core to not pull in git-web and gitk
+
+-------------------------------------------------------------------
+Wed Jul  8 08:47:32 UTC 2015 - aboe76@gmail.com
+
+- New Bugfix release 2015.5.3
+
+  for more details:
+  http://docs.saltstack.com/en/latest/topics/releases/2015.5.3.html
+
+-------------------------------------------------------------------
+Thu Jun  4 19:46:19 UTC 2015 - aboe76@gmail.com
+
+- New Bugfix release 2015.5.2
+  
+  for more details:
+  http://docs.saltstack.com/en/latest/topics/releases/2015.5.2.html
+
+-------------------------------------------------------------------
+Sat May 23 18:31:44 UTC 2015 - aboe76@gmail.com
+
+- New Bugfix release 2015.5.1
+  salt.runners.cloud.action() has changed the fun keyword argument to func.
+  Please update any calls to this function in the cloud runner.
+
+  for more details:
+  http://docs.saltstack.com/en/latest/topics/releases/2015.5.1.html
+
+-------------------------------------------------------------------
+Fri May 15 21:04:44 UTC 2015 - aboe76@gmail.com
+
+- Removed python-pssh depency not needed anymore.
+
+-------------------------------------------------------------------
+Wed May  6 20:33:53 UTC 2015 - aboe76@gmail.com
+
+- Major release 2015.5.0 Lithium
+- update to 2015.5.0
+  The 2015.5.0 feature release of Salt is focused on hardening Salt
+  and mostly on improving existing systems. A few major additions
+  are present, primarily the new Beacon system. Most enhancements
+  have been focused around improving existing features and
+  interfaces.
+
+  As usual the release notes are not exhaustive and primarily
+  include the most notable additions and improvements. Hundreds of
+  bugs have been fixed and many modules have been substantially
+  updated and added.
+
+
+  See especially the warning right on the top regarding
+  python_shell=False.
+
+  For all details see
+   http://docs.saltstack.com/en/latest/topics/releases/2015.5.0.html
+- RPM Package changes:
+- add some versions to the buildrequires to match the 2
+  requirements files from the tarball
+- Moved the depencencies to main salt package
+  except where they are specific for the package
+- Changed python-request dependency,only needed on salt-cloud
+- Added python-tornado dependency for http.py
+- Fixed zsh_completion in tarball.
+- Fixed salt-api requirements to require python-cherrypy
+- Fixed salt-cloud requiments to require salt-master
+
+-------------------------------------------------------------------
+Sun Apr 19 17:48:05 UTC 2015 - aboe76@gmail.com
+
+- New Bugfix release 2014.7.5
+Changes:
++ Fixed a key error bug in salt-cloud
++ Updated man pages to better match documentation
++ Fixed bug concerning high CPU usage with salt-ssh
++ Fixed bugs with remounting cvfs and fuse filesystems
++ Fixed bug with alowing requisite tracking of entire sls files
++ Fixed bug with aptpkg.mod_repo returning OK even if apt-add-repository fails
++ Increased frequency of ssh terminal output checking
++ Fixed malformed locale string in localmod module
++ Fixed checking of available version of package when accept_keywords were changed
++ Fixed bug to make git.latest work with empty repositories
++ Added **kwargs to service.mod_watch which removes warnings about enable and __reqs__ not being supported by the function
++ Improved state comments to not grow so quickly on failed requisites
++ Added force argument to service to trigger force_reload
++ Fixed bug to andle pkgrepo keyids that have been converted to int
++ Fixed module.portage_config bug with appending accept_keywords
++ Fixed bug to correctly report disk usage on windows minion
++ Added the ability to specify key prefix for S3 ext_pillar
++ Fixed issues with batch mode operating on the incorrect number of minions
++ Fixed a bug with the proxmox cloud provider stacktracing on disk definition
++ Fixed a bug with the changes dictionary in the file state
++ Fixed the TCP keep alive settings to work better with SREQ caching
++ Fixed many bugs within the iptables state and module
++ Fixed bug with states by adding fun, state, and unless to the state runtime internal keywords listing
++ Added ability to eAuth against Active Directory
++ Fixed some salt-ssh issues when running on Fedora 21
++ Fixed grains.get_or_set_hash to work with multiple entries under same key
++ Added better explanations and more examples of how the Reactor calls functions to docs
++ Fixed bug to not pass ex_config_drive to libcloud unless it's explicitly enabled
++ Fixed bug with pip.install on windows
++ Fixed bug where puppet.run always returns a 0 retcode
++ Fixed race condition bug with minion scheduling via pillar
++ Made efficiency improvements and bug fixes to the windows installer
++ Updated environment variables to fix bug with pygit2 when running salt as non-root user
++ Fixed cas behavior on data module -- data.cas was not saving changes
++ Fixed GPG rendering error
++ Fixed strace error in virt.query
++ Fixed stacktrace when running chef-solo command
++ Fixed possible bug wherein uncaught exceptions seem to make zmq3 tip over when threading is involved
++ Fixed argument passing to the reactor
++ Fixed glibc caching to prevent bug where salt-minion getaddrinfo in dns_check() never got updated nameservers
+Known Issues:
++ In multimaster mode, a minion may become temporarily unresponsive if modules or pillars are refreshed at the
+same time that one or more masters are down. This can be worked around by setting 'auth_timeout' and 'auth_tries'
+down to shorter periods.
+
+-------------------------------------------------------------------
+Mon Mar 30 21:41:22 UTC 2015 - aboe76@gmail.com
+
+- New Bugfix Release 2014.7.4
+- Updated patch use-forking-daemon.patch
+- fix salt-zsh-completion conflicts
++ Multi-master minions mode no longer route fileclient operations asymetrically.
+  This fixes the source of many multi-master bugs where the minion would
+  become unrepsonsive from one or more masters.
++ Fix bug wherein network.iface could produce stack traces.
++ net.arp will no longer be made available unless arp is installed on the
+  system.
++ Major performance improvements to Saltnado
++ Allow KVM module to operate under KVM itself or VMware Fusion
++ Various fixes to the Windows installation scripts
++ Fix issue where the syndic would not correctly propagate loads to the master
+  job cache.
++ Improve error handling on invalid /etc/network/interfaces file in salt
+  networking modules
++ Fix bug where a response status was not checked for in fileclient.get_url
++ Enable eauth when running salt in batch mode
++ Increase timeout in Boto Route53 module
++ Fix bugs with Salt's 'tar' module option parsing
++ Fix parsing of NTP servers on Windows
++ Fix issue with blockdev tuning not reporting changes correctly
++ Update to the latest Salt bootstrap script
++ Update Linode salt-cloud driver to use either linode-python or
+  apache-libcloud
++ Fix for s3.query function to return correct headers
++ Fix for s3.head returning None for files that exist
++ Fix the disable function in win_service module so that the service is
+  disabled correctly
++ Fix race condition between master and minion when making a directory when
+  both daemons are on the same host
++ Fix an issue where file.recurse would fail at the root of an svn repo
+  when the repo has a mountpoint
++ Fix an issue where file.recurse would fail at the root of an hgfs repo
+  when the repo has a mountpoint
++ Fix an issue where file.recurse would fail at the root of an gitfs repo
+  when the repo has a mountpoint
++ Add status.master capability for Windows.
++ Various fixes to ssh_known_hosts
++ Various fixes to states.network bonding for Debian
++ The debian_ip.get_interfaces module no longer removes nameservers.
++ Better integration between grains.virtual and systemd-detect-virt and
+  virt-what
++ Fix traceback in sysctl.present state output
++ Fix for issue where mount.mounted would fail when superopts were not a part
+  of mount.active (extended=True). Also mount.mounted various fixes for Solaris
+  and FreeBSD.
++ Fix error where datetimes were not correctly safeguarded before being passed
+  into msgpack.
++ Fix file.replace regressions.  If the pattern is not found, and if dry run is False,
+  and if `backup` is False, and if a pre-existing file exists with extension `.bak`,
+  then that backup file will be overwritten. This backup behavior is a result of how `fileinput`
+  works. Fixing it requires either passing through the file twice (the
+  first time only to search for content and set a flag), or rewriting
+  `file.replace` so it doesn't use `fileinput`
++ VCS filreserver fixes/optimizations
++ Catch fileserver configuration errors on master start
++ Raise errors on invalid gitfs configurations
++ set_locale when locale file does not exist (Redhat family)
++ Fix to correctly count active devices when created mdadm array with spares
++ Fix to correctly target minions in batch mode
++ Support ssh:// urls using the gitfs dulwhich backend
++ New fileserver runner
++ Fix various bugs with argument parsing to the publish module.
++ Fix disk.usage for Synology OS
++ Fix issue with tags occurring twice with docker.pulled
++ Fix incorrect key error in SMTP returner
++ Fix condition which would remount loopback filesystems on every state run
++ Remove requsites from listens after they are called in the state system
++ Make system implementation of service.running aware of legacy service calls
++ Fix issue where publish.publish would not handle duplicate responses gracefully.
++ Accept Kali Linux for aptpkg salt execution module
++ Fix bug where cmd.which could not handle a dirname as an argument
++ Fix issue in ps.pgrep where exceptions were thrown on Windows.
+
+- Known Issues:
++ In multimaster mode, a minion may become temporarily unresponsive
+  if modules or pillars are refreshed at the same time that one
+  or more masters are down. This can be worked around by setting
+  'auth_timeout' and 'auth_tries' down to shorter periods.
+-------------------------------------------------------------------
 Thu Feb 12 19:35:34 UTC 2015 - aboe76@gmail.com
 
 - New Bugfix release 2014.7.2:
@@ -6,11 +436,11 @@ Thu Feb 12 19:35:34 UTC 2015 - aboe76@gmail.com
 - keep sle 11 sp3 support.
 + Fix erroneous warnings for systemd service enabled check (issue 19606)
 + Fix FreeBSD kernel module loading, listing, and persistence kmod (issue 197151, issue 19682)
-+ Allow case-sensitive npm package names in the npm state. This may break behavior 
-  for people expecting the state to lowercase their npm package names for them. 
++ Allow case-sensitive npm package names in the npm state. This may break behavior
+  for people expecting the state to lowercase their npm package names for them.
   The npm module was never affected by mandatory lowercasing. (issue 20329)
-+ Deprecate the activate parameter for pip.install for both the module and the state. 
-  If bin_env is given and points to a virtualenv, there is no need to activate that virtualenv 
++ Deprecate the activate parameter for pip.install for both the module and the state.
+  If bin_env is given and points to a virtualenv, there is no need to activate that virtualenv
   in a shell for pip to install to the virtualenv.
 + Fix a file-locking bug in gitfs (issue 18839)
 
@@ -80,7 +510,7 @@ Mon Nov  3 21:35:31 UTC 2014 - aboe76@gmail.com
    + New hgfs Features
    	+ mountpoints support
    + New svnfs Features:
-    + mountpoints 
+    + mountpoints
    + minionfs Featuressupport
     + mountpoints
  - New Salt Modules:
@@ -114,7 +544,7 @@ Thu Oct 16 19:26:57 UTC 2014 - aboe76@gmail.com
 - Updated to 2014.1.13 a bugfix release on 2014.1.12
   + fix module run exit code (issue 16420)
   + salt cloud Check the exit status code of scp before assuming it has failed. (issue 16599)
-  
+
 
 -------------------------------------------------------------------
 Fri Oct 10 18:47:07 UTC 2014 - aboe76@gmail.com
@@ -135,7 +565,7 @@ Wed Sep 10 18:10:50 UTC 2014 - aboe76@gmail.com
   + Fix json outputter null case
   + Fix for minion error if one of multiple masters are down (issue 14099)
   + Updated the use-forking-daemon.patch with the right version
-  
+
 -------------------------------------------------------------------
 Mon Aug 18 13:06:07 UTC 2014 - tserong@suse.com
 
@@ -209,7 +639,7 @@ Sat Jul 19 07:58:18 UTC 2014 - aboe76@gmail.com
 Thu Jul 10 18:25:05 UTC 2014 - aboe76@gmail.com
 
 - Update to 2014.7
-  This release was a hotfix release for the regression listed above which was present in the 2014.1.6 
+  This release was a hotfix release for the regression listed above which was present in the 2014.1.6
 - Fix batch mode regression (issue 14046)
 
 -------------------------------------------------------------------
@@ -329,11 +759,11 @@ Thu Apr 17 18:06:56 UTC 2014 - aboe76@gmail.com
   - Fix git.latest with test=True (issue 11595)
   - Fix file.check_perms hardcoded follow_symlinks (issue 11387)
   - Fix certain pkg states for RHEL5/Cent5 machines (issue 11719)
-- Packaging: 
+- Packaging:
   - python-psutil depencies (more functional modules out of the box)
   - python-yaml depencies (more functional modules out of the box)
   - python-requests depencies (salt-cloud)
-  
+
 
 -------------------------------------------------------------------
 Wed Mar 19 19:29:13 UTC 2014 - aboe76@gmail.com
@@ -495,7 +925,7 @@ Thu Nov 14 22:05:06 UTC 2013 - aboe76@gmail.com
   - Fix for matching minions under syndics (issue 7671)
   - Improve exception handling for missing ID (issue 8259)
   - Add configuration option for minion_id_caching
-  - Fix open mode auth errors (issue 8402)  
+  - Fix open mode auth errors (issue 8402)
 
 -------------------------------------------------------------------
 Sun Nov 10 07:52:54 UTC 2013 - aboe76@gmail.com
@@ -614,30 +1044,30 @@ Thu Sep 19 17:18:06 UTC 2013 - aboe76@gmail.com
   Minor features:
   - 0.17.0 release wil be last release for 0.XX.X numbering system
     Next release will be <Year>.<Month>.<Minor>
-     
+
 -------------------------------------------------------------------
 Sat Sep  7 22:44:41 UTC 2013 - aboe76@gmail.com
 
 - Update 0.16.4 bugfix release:
   - Multiple documentation improvements/additions
   - Added the osfinger and osarch grains
-  - Fix bug in :mod:`hg.latest <salt.states.hg.latest>` state 
+  - Fix bug in :mod:`hg.latest <salt.states.hg.latest>` state
   that would erroneously delete directories (:issue:`6661`)
-  - Fix bug related to pid not existing for 
+  - Fix bug related to pid not existing for
   :mod:`ps.top <salt.modules.ps.top>` (:issue:`6679`)
-  - Fix regression in :mod:`MySQL returner <salt.returners.mysql>` 
+  - Fix regression in :mod:`MySQL returner <salt.returners.mysql>`
   (:issue:`6695`)
   - Fix IP addresses grains (ipv4 and ipv6) to include all addresses
   (:issue:`6656`)
   - Fix regression preventing authenticated FTP (:issue:`6733`)
-  - Fix :mod:`file.contains <salt.modules.file.contains>` on values 
+  - Fix :mod:`file.contains <salt.modules.file.contains>` on values
   YAML parses as non-string (:issue:`6817`)
-  - Fix :mod:`file.get_gid <salt.modules.file.get_gid>`, 
-  :mod:`file.get_uid <salt.modules.file.get_uid>`, and 
-  :mod:`file.chown <salt.modules.file.chown>` for broken symlinks 
+  - Fix :mod:`file.get_gid <salt.modules.file.get_gid>`,
+  :mod:`file.get_uid <salt.modules.file.get_uid>`, and
+  :mod:`file.chown <salt.modules.file.chown>` for broken symlinks
   (:issue:`6826`)
   - Fix comment for service reloads in service state (:issue:`6851`)
-  
+
 -------------------------------------------------------------------
 Fri Aug  9 18:08:12 UTC 2013 - aboe76@gmail.com
 
@@ -700,7 +1130,7 @@ Mon Jul 29 18:06:03 UTC 2013 - aboe76@gmail.com
   - http authentication issues fixed  #6356
   - warning of deprecation runas in favor of user
 - more information at https://github.com/saltstack/salt/commits/v0.16.1
-  
+
 -------------------------------------------------------------------
 Fri Jul  5 21:24:21 UTC 2013 - aboe76@gmail.com
 
@@ -765,7 +1195,7 @@ Wed May 29 16:10:42 UTC 2013 - aboe76@gmail.com
   xinetd service name not appended
   virt-module uses qemu-img
   publish.publish returns same info as salt-master
-  updated gitfs module  
+  updated gitfs module
 
 -------------------------------------------------------------------
 Mon May 27 20:42:06 UTC 2013 - aboe76@gmail.com
@@ -865,7 +1295,7 @@ Wed Mar 13 22:04:43 UTC 2013 - aboe76@gmail.com
 -------------------------------------------------------------------
 Mon Feb 25 17:52:59 UTC 2013 - aboe76@gmail.com
 
-- Updated spec file, postun removal of init.d files 
+- Updated spec file, postun removal of init.d files
 
 -------------------------------------------------------------------
 Sat Feb 16 09:25:30 UTC 2013 - aboe76@gmail.com
@@ -891,7 +1321,7 @@ Thu Feb 14 06:43:08 UTC 2013 - aboe76@gmail.com
 -------------------------------------------------------------------
 Wed Jan 30 20:57:57 UTC 2013 - aboe76@gmail.com
 
-- Updated Suse Copyright in Spec-file
+- Updated SUSE Copyright in Spec-file
 
 -------------------------------------------------------------------
 Mon Jan 28 15:23:08 UTC 2013 - toddrme2178@gmail.com

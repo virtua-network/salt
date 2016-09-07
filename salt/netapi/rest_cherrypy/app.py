@@ -7,39 +7,58 @@ A REST API for Salt
 
 .. py:currentmodule:: salt.netapi.rest_cherrypy.app
 
-:depends:   - CherryPy Python module. Versions 3.2.{2,3,4} are strongly
-    recommended due to a known `SSL error
-    <https://bitbucket.org/cherrypy/cherrypy/issue/1298/ssl-not-working>`_
-    introduced in version 3.2.5. The issue was reportedly resolved with
-    CherryPy milestone 3.3, but the patch was committed for version 3.6.1.
-            - salt-api package
+:depends:
+    - CherryPy Python module. Version 3.2.3 is currently recommended when
+      SSL is enabled, since this version worked the best with SSL in
+      internal testing. Versions 3.2.3 - 4.x can be used if SSL is not enabled.
+      Be aware that there is a known
+      `SSL error <https://bitbucket.org/cherrypy/cherrypy/issue/1298/ssl-not-working>`_
+      introduced in version 3.2.5. The issue was reportedly resolved with
+      CherryPy milestone 3.3, but the patch was committed for version 3.6.1.
 :optdepends:    - ws4py Python module for websockets support.
-:configuration: All authentication is done through Salt's :ref:`external auth
-    <acl-eauth>` system which requires additional configuration not described
-    here.
+:client_libraries:
+    - Java: https://github.com/SUSE/salt-netapi-client
+    - Python: https://github.com/saltstack/pepper
+:setup:
+    All steps below are performed on the machine running the Salt Master
+    daemon. Configuration goes into the Master configuration file.
 
-    Example production-ready configuration; add to the Salt master config file
-    and restart the ``salt-master`` and ``salt-api`` daemons:
+    1.  Install ``salt-api``. (This step varies between OS and Linux distros.
+        Some package systems have a split package, others include salt-api in
+        the main Salt package. Ensure the ``salt-api --version`` output matches
+        the ``salt --version`` output.)
+    2.  Install CherryPy. (Read the version caveat in the section above.)
+    3.  Optional: generate self-signed SSL certificates.
 
-    .. code-block:: yaml
+        Using a secure HTTPS connection is strongly recommended since Salt
+        eauth authentication credentials will be sent over the wire.
 
-        rest_cherrypy:
-          port: 8000
-          ssl_crt: /etc/pki/tls/certs/localhost.crt
-          ssl_key: /etc/pki/tls/certs/localhost.key
+        1.  Install the PyOpenSSL package.
+        2.  Generate a self-signed certificate using the
+            :py:func:`~salt.modules.tls.create_self_signed_cert` execution
+            function.
 
-    Using only a secure HTTPS connection is strongly recommended since Salt
-    authentication credentials will be sent over the wire.
+            .. code-block:: bash
 
-    A self-signed certificate can be generated using the
-    :py:func:`~salt.modules.tls.create_self_signed_cert` execution function.
-    Running this function requires pyOpenSSL and the ``salt-call`` script is
-    available in the ``salt-minion`` package.
+                salt-call --local tls.create_self_signed_cert
 
-    .. code-block:: bash
+    4.  Edit the master config to create at least one external auth user or
+        group following the :ref:`full external auth instructions <acl-eauth>`.
+    5.  Edit the master config with the following production-ready example to
+        enable the ``rest_cherrypy`` module. (Adjust cert paths as needed, or
+        disable SSL (not recommended!).)
 
-        salt-call --local tls.create_self_signed_cert
+        .. code-block:: yaml
 
+            rest_cherrypy:
+              port: 8000
+              ssl_crt: /etc/pki/tls/certs/localhost.crt
+              ssl_key: /etc/pki/tls/certs/localhost.key
+
+    6.  Restart the ``salt-master`` daemon.
+    7.  Start the ``salt-api`` daemon.
+
+:configuration:
     All available configuration options are detailed below. These settings
     configure the CherryPy HTTP server and do not apply when using an external
     server such as Apache or Nginx.
@@ -53,10 +72,21 @@ A REST API for Salt
     debug : ``False``
         Starts the web server in development mode. It will reload itself when
         the underlying code is changed and will output more debugging info.
+    log_access_file
+        Path to a file to write HTTP access logs.
+
+        .. versionaddedd:: Carbon
+    log_error_file
+        Path to a file to write HTTP error logs.
+
+        .. versionaddedd:: Carbon
     ssl_crt
         The path to a SSL certificate. (See below)
     ssl_key
         The path to the private key for your SSL certificate. (See below)
+    ssl_chain
+        (Optional when using PyOpenSSL) the certificate chain to pass to
+        ``Context.load_verify_locations``.
     disable_ssl
         A flag to disable SSL. Warning: your Salt authentication credentials
         will be sent in the clear!
@@ -114,23 +144,22 @@ The token may be sent in one of two ways:
 
   .. code-block:: bash
 
-      curl -sSk https://localhost:8000/login \
-            -H 'Accept: application/x-yaml' \
-            -d username=saltdev \
-            -d password=saltdev \
-            -d eauth=auto
+      curl -sSk https://localhost:8000/login \\
+          -H 'Accept: application/x-yaml' \\
+          -d username=saltdev \\
+          -d password=saltdev \\
+          -d eauth=auto
 
-  Copy the ``token`` value from the output and include it in subsequent
-  requests:
+  Copy the ``token`` value from the output and include it in subsequent requests:
 
   .. code-block:: bash
 
-  curl -sSk https://localhost:8000 \
-            -H 'Accept: application/x-yaml' \
-            -H 'X-Auth-Token: 697adbdc8fe971d09ae4c2a3add7248859c87079'\
-            -d client=local \
-            -d tgt='*' \
-            -d fun=test.ping
+      curl -sSk https://localhost:8000 \\
+          -H 'Accept: application/x-yaml' \\
+          -H 'X-Auth-Token: 697adbdc8fe971d09ae4c2a3add7248859c87079'\\
+          -d client=local \\
+          -d tgt='*' \\
+          -d fun=test.ping
 
 * Sent via a cookie. This option is a convenience for HTTP clients that
   automatically handle cookie support (such as browsers).
@@ -140,20 +169,44 @@ The token may be sent in one of two ways:
   .. code-block:: bash
 
       # Write the cookie file:
-      curl -sSk https://localhost:8000/login \
-            -c ~/cookies.txt \
-            -H 'Accept: application/x-yaml' \
-            -d username=saltdev \
-            -d password=saltdev \
+      curl -sSk https://localhost:8000/login \\
+            -c ~/cookies.txt \\
+            -H 'Accept: application/x-yaml' \\
+            -d username=saltdev \\
+            -d password=saltdev \\
             -d eauth=auto
 
       # Read the cookie file:
-      curl -sSk https://localhost:8000 \
-            -b ~/cookies.txt \
-            -H 'Accept: application/x-yaml' \
-            -d client=local \
-            -d tgt='*' \
+      curl -sSk https://localhost:8000 \\
+            -b ~/cookies.txt \\
+            -H 'Accept: application/x-yaml' \\
+            -d client=local \\
+            -d tgt='*' \\
             -d fun=test.ping
+
+  Another example using the :program:`requests` library in Python:
+
+  .. code-block:: python
+
+      >>> import requests
+      >>> session = requests.Session()
+      >>> session.post('http://localhost:8000/login', json={
+          'username': 'saltdev',
+          'password': 'saltdev',
+          'eauth': 'auto',
+      })
+      <Response [200]>
+      >>> resp = session.post('http://localhost:8000', json=[{
+          'client': 'local',
+          'tgt': '*',
+          'fun': 'test.arg',
+          'arg': ['foo', 'bar'],
+          'kwarg': {'baz': 'Baz!'},
+      }])
+      >>> resp.json()
+      {u'return': [{
+          ...snip...
+      }]}
 
 .. seealso:: You can bypass the session handling via the :py:class:`Run` URL.
 
@@ -227,8 +280,25 @@ command sent to minions as well as a runner function on the master::
     :mailheader:`Accept` request header.
 
 .. |200| replace:: success
+.. |400| replace:: bad or malformed request
 .. |401| replace:: authentication required
 .. |406| replace:: requested Content-Type not available
+
+A Note About Curl
+=================
+
+When sending passwords and data that might need to be urlencoded, you must set
+the ``-d`` flag to indicate the content type, and the ``--data-urlencode`` flag
+to urlencode the input.
+
+.. code-block:: bash
+
+    curl -ksi http://localhost:8000/login \\
+    -H "Accept: application/json" \\
+    -d username='myapiuser' \\
+    --data-urlencode password='1234+' \\
+    -d eauth='pam'
+
 '''
 # We need a custom pylintrc here...
 # pylint: disable=W0212,E1101,C0103,R0201,W0221,W0613
@@ -240,7 +310,6 @@ import itertools
 import functools
 import logging
 import json
-import StringIO
 import tarfile
 import time
 from multiprocessing import Process, Pipe
@@ -248,7 +317,6 @@ from multiprocessing import Process, Pipe
 # Import third-party libs
 # pylint: disable=import-error
 import cherrypy
-from cherrypy.lib import cpstats
 import yaml
 import salt.ext.six as six
 # pylint: enable=import-error
@@ -278,6 +346,41 @@ except ImportError:
     HAS_WEBSOCKETS = False
 
 
+def html_override_tool():
+    '''
+    Bypass the normal handler and serve HTML for all URLs
+
+    The ``app_path`` setting must be non-empty and the request must ask for
+    ``text/html`` in the ``Accept`` header.
+    '''
+    apiopts = cherrypy.config['apiopts']
+    request = cherrypy.request
+
+    url_blacklist = (
+        apiopts.get('app_path', '/app'),
+        apiopts.get('static_path', '/static'),
+    )
+
+    if 'app' not in cherrypy.config['apiopts']:
+        return
+
+    if request.path_info.startswith(url_blacklist):
+        return
+
+    if request.headers.get('Accept') == '*/*':
+        return
+
+    try:
+        wants_html = cherrypy.lib.cptools.accept('text/html')
+    except cherrypy.HTTPError:
+        return
+    else:
+        if wants_html != 'text/html':
+            return
+
+    raise cherrypy.InternalRedirect(apiopts.get('app_path', '/app'))
+
+
 def salt_token_tool():
     '''
     If the custom authentication header is supplied, put it in the cookie dict
@@ -288,6 +391,75 @@ def salt_token_tool():
     # X-Auth-Token header trumps session cookie
     if x_auth:
         cherrypy.request.cookie['session_id'] = x_auth
+
+
+def salt_api_acl_tool(username, request):
+    '''
+    ..versionadded:: 2016.3.0
+
+    Verifies user requests against the API whitelist. (User/IP pair)
+    in order to provide whitelisting for the API similar to the
+    master, but over the API.
+
+    ..code-block:: yaml
+
+        rest_cherrypy:
+            api_acl:
+                users:
+                    '*':
+                        - 1.1.1.1
+                        - 1.1.1.2
+                    foo:
+                        - 8.8.4.4
+                    bar:
+                        - '*'
+
+    :param username: Username to check against the API.
+    :type username: str
+    :param request: Cherrypy request to check against the API.
+    :type request: cherrypy.request
+    '''
+    failure_str = ("[api_acl] Authentication failed for "
+                   "user {0} from IP {1}")
+    success_str = ("[api_acl] Authentication sucessful for "
+                   "user {0} from IP {1}")
+    pass_str = ("[api_acl] Authentication not checked for "
+                "user {0} from IP {1}")
+
+    acl = None
+    # Salt Configuration
+    salt_config = cherrypy.config.get('saltopts', None)
+    if salt_config:
+        # Cherrypy Config.
+        cherrypy_conf = salt_config.get('rest_cherrypy', None)
+        if cherrypy_conf:
+            # ACL Config.
+            acl = cherrypy_conf.get('api_acl', None)
+
+    ip = request.remote.ip
+    if acl:
+        users = acl.get('users', {})
+        if users:
+            if username in users:
+                if ip in users[username] or '*' in users[username]:
+                    logger.info(success_str.format(username, ip))
+                    return True
+                else:
+                    logger.info(failure_str.format(username, ip))
+                    return False
+            elif username not in users and '*' in users:
+                if ip in users['*'] or '*' in users['*']:
+                    logger.info(success_str.format(username, ip))
+                    return True
+                else:
+                    logger.info(failure_str.format(username, ip))
+                    return False
+            else:
+                logger.info(failure_str.format(username, ip))
+                return False
+    else:
+        logger.info(pass_str.format(username, ip))
+        return True
 
 
 def salt_ip_verify_tool():
@@ -398,6 +570,11 @@ def hypermedia_handler(*args, **kwargs):
     except (salt.exceptions.EauthAuthenticationError,
             salt.exceptions.TokenAuthenticationError):
         raise cherrypy.HTTPError(401)
+    except salt.exceptions.SaltInvocationError:
+        raise cherrypy.HTTPError(400)
+    except (salt.exceptions.SaltDaemonNotRunning,
+            salt.exceptions.SaltReqTimeoutError) as exc:
+        raise cherrypy.HTTPError(503, exc.strerror)
     except cherrypy.CherryPyException:
         raise
     except Exception as exc:
@@ -421,7 +598,12 @@ def hypermedia_handler(*args, **kwargs):
     # Transform the output from the handler into the requested output format
     cherrypy.response.headers['Content-Type'] = best
     out = cherrypy.response.processors[best]
-    return out(ret)
+    try:
+        return out(ret)
+    except Exception:
+        msg = 'Could not serialize the return data from Salt.'
+        logger.debug(msg, exc_info=True)
+        raise cherrypy.HTTPError(500, msg)
 
 
 def hypermedia_out():
@@ -546,6 +728,7 @@ def hypermedia_in():
     if (cherrypy.request.method.upper() == 'POST'
             and cherrypy.request.headers.get('Content-Length', '0') == '0'):
         cherrypy.request.process_request_body = False
+        cherrypy.request.unserialized_data = None
 
     cherrypy.request.body.processors.clear()
     cherrypy.request.body.default_proc = cherrypy.HTTPError(
@@ -567,7 +750,7 @@ def lowdata_fmt():
     # if the data was sent as urlencoded, we need to make it a list.
     # this is a very forgiving implementation as different clients set different
     # headers for form encoded data (including charset or something similar)
-    if not isinstance(data, list):
+    if data and not isinstance(data, list):
         # Make the 'arg' param a list if not already
         if 'arg' in data and not isinstance(data['arg'], list):
             data['arg'] = [data['arg']]
@@ -578,13 +761,15 @@ def lowdata_fmt():
         cherrypy.serving.request.lowstate = data
 
 
+cherrypy.tools.html_override = cherrypy.Tool('on_start_resource',
+        html_override_tool, priority=53)
 cherrypy.tools.salt_token = cherrypy.Tool('on_start_resource',
         salt_token_tool, priority=55)
 cherrypy.tools.salt_auth = cherrypy.Tool('before_request_body',
         salt_auth_tool, priority=60)
 cherrypy.tools.hypermedia_in = cherrypy.Tool('before_request_body',
         hypermedia_in)
-cherrypy.tools.cors_tool = cherrypy.Tool('before_handler',
+cherrypy.tools.cors_tool = cherrypy.Tool('before_request_body',
         cors_tool, priority=30)
 cherrypy.tools.lowdata_fmt = cherrypy.Tool('before_handler',
         lowdata_fmt, priority=40)
@@ -643,6 +828,10 @@ class LowDataAdapter(object):
         for chunk in lowstate:
             if token:
                 chunk['token'] = token
+                if cherrypy.session.get('user'):
+                    chunk['__current_eauth_user'] = cherrypy.session.get('user')
+                if cherrypy.session.get('groups'):
+                    chunk['__current_eauth_groups'] = cherrypy.session.get('groups')
 
             if client:
                 chunk['client'] = client
@@ -694,14 +883,9 @@ class LowDataAdapter(object):
         '''
         import inspect
 
-        # Grab all available client interfaces
-        clients = [name for name, _ in inspect.getmembers(salt.netapi.NetapiClient,
-            predicate=inspect.ismethod) if not name.startswith('__')]
-        clients.remove('run')  # run method calls client interfaces
-
         return {
             'return': "Welcome",
-            'clients': clients,
+            'clients': salt.netapi.CLIENTS,
         }
 
     @cherrypy.tools.salt_token()
@@ -719,6 +903,7 @@ class LowDataAdapter(object):
             :resheader Content-Type: |res_ct|
 
             :status 200: |200|
+            :status 400: |400|
             :status 401: |401|
             :status 406: |406|
 
@@ -775,7 +960,7 @@ class LowDataAdapter(object):
                     -d arg='du -sh .' \\
                     -d arg='/path/to/dir'
 
-            # Sending posiitonal args and Keyword args with JSON:
+            # Sending positional args and Keyword args with JSON:
             echo '[
                 {
                     "client": "local",
@@ -883,6 +1068,7 @@ class Minions(LowDataAdapter):
             :resheader Content-Type: |res_ct|
 
             :status 200: |200|
+            :status 400: |400|
             :status 401: |401|
             :status 406: |406|
 
@@ -943,7 +1129,7 @@ class Jobs(LowDataAdapter):
         'tools.salt_auth.on': True,
     })
 
-    def GET(self, jid=None):
+    def GET(self, jid=None, timeout=''):
         '''
         A convenience URL for getting lists of previously run jobs or getting
         the return from a single job
@@ -951,6 +1137,9 @@ class Jobs(LowDataAdapter):
         .. http:get:: /jobs/(jid)
 
             List jobs or show a single job from the job cache.
+
+            :reqheader X-Auth-Token: |req_token|
+            :reqheader Accept: |req_accept|
 
             :status 200: |200|
             :status 401: |401|
@@ -1062,6 +1251,7 @@ class Keys(LowDataAdapter):
     module <salt.wheel.key>` functions.
     '''
 
+    @cherrypy.config(**{'tools.salt_token.on': True})
     def GET(self, mid=None):
         '''
         Show the list of minion keys or detail on a specific key
@@ -1129,8 +1319,6 @@ class Keys(LowDataAdapter):
               minions:
                 jerry: 51:93:b3:d0:9f:3a:6d:e5:28:67:c2:4b:27:d6:cd:2b
         '''
-        self._cp_config['tools.salt_token.on'] = True
-
         if mid:
             lowstate = [{
                 'client': 'wheel',
@@ -1148,11 +1336,13 @@ class Keys(LowDataAdapter):
 
         return {'return': next(result, {}).get('data', {}).get('return', {})}
 
-    def POST(self, mid, keysize=None, force=None, **kwargs):
+    @cherrypy.config(**{'tools.hypermedia_out.on': False, 'tools.sessions.on': False})
+    def POST(self, **kwargs):
         r'''
         Easily generate keys for a minion and auto-accept the new key
 
-        .. versionadded:: 2014.7.0
+        Accepts all the same parameters as the :py:func:`key.gen_accept
+        <salt.wheel.key.gen_accept>`.
 
         Example partial kickstart script to bootstrap a new minion:
 
@@ -1208,24 +1398,15 @@ class Keys(LowDataAdapter):
 
             jerry.pub0000644000000000000000000000070300000000000010730 0ustar  00000000000000
         '''
-        self._cp_config['tools.hypermedia_out.on'] = False
-        self._cp_config['tools.sessions.on'] = False
-
-        lowstate = [{
+        lowstate = cherrypy.request.lowstate
+        lowstate[0].update({
             'client': 'wheel',
             'fun': 'key.gen_accept',
-            'id_': mid,
-        }]
+        })
 
-        if keysize:
-            lowstate[0]['keysize'] = keysize
+        if 'mid' in lowstate[0]:
+            lowstate[0]['id_'] = lowstate[0].pop('mid')
 
-        if force:
-            lowstate[0]['force'] = force
-
-        lowstate[0].update(kwargs)
-
-        cherrypy.request.lowstate = lowstate
         result = self.exec_lowstate()
         ret = next(result, {}).get('data', {}).get('return', {})
 
@@ -1237,14 +1418,14 @@ class Keys(LowDataAdapter):
         priv_key_file = tarfile.TarInfo('minion.pem')
         priv_key_file.size = len(priv_key)
 
-        fileobj = StringIO.StringIO()
+        fileobj = six.moves.StringIO()
         tarball = tarfile.open(fileobj=fileobj, mode='w')
-        tarball.addfile(pub_key_file, StringIO.StringIO(pub_key))
-        tarball.addfile(priv_key_file, StringIO.StringIO(priv_key))
+        tarball.addfile(pub_key_file, six.moves.StringIO(pub_key))
+        tarball.addfile(priv_key_file, six.moves.StringIO(priv_key))
         tarball.close()
 
         headers = cherrypy.response.headers
-        headers['Content-Disposition'] = 'attachment; filename="saltkeys-{0}.tar"'.format(mid)
+        headers['Content-Disposition'] = 'attachment; filename="saltkeys-{0}.tar"'.format(lowstate[0]['id_'])
         headers['Content-Type'] = 'application/x-tar'
         headers['Content-Length'] = fileobj.len
         headers['Cache-Control'] = 'no-cache'
@@ -1365,12 +1546,22 @@ class Login(LowDataAdapter):
                 ]
             }}
         '''
+        if not self.api._is_master_running():
+            raise salt.exceptions.SaltDaemonNotRunning(
+                'Salt Master is not available.')
+
         # the urlencoded_processor will wrap this in a list
         if isinstance(cherrypy.serving.request.lowstate, list):
             creds = cherrypy.serving.request.lowstate[0]
         else:
             creds = cherrypy.serving.request.lowstate
 
+        username = creds.get('username', None)
+        # Validate against the whitelist.
+        if not salt_api_acl_tool(username, cherrypy.request):
+            raise cherrypy.HTTPError(401)
+
+        # Mint token.
         token = self.auth.mk_token(creds)
         if 'token' not in token:
             raise cherrypy.HTTPError(401,
@@ -1379,20 +1570,32 @@ class Login(LowDataAdapter):
         cherrypy.response.headers['X-Auth-Token'] = cherrypy.session.id
         cherrypy.session['token'] = token['token']
         cherrypy.session['timeout'] = (token['expire'] - token['start']) / 60
+        cherrypy.session['user'] = token['name']
+        if 'groups' in token:
+            cherrypy.session['groups'] = token['groups']
 
         # Grab eauth config for the current backend for the current user
         try:
             eauth = self.opts.get('external_auth', {}).get(token['eauth'], {})
-            perms = eauth.get(token['name'], eauth.get('*'))
 
-            if perms is None:
-                raise ValueError("Eauth permission list not found.")
-        except (AttributeError, IndexError, KeyError, ValueError):
+            # Get sum of '*' perms, user-specific perms, and group-specific perms
+            perms = eauth.get(token['name'], [])
+            perms.extend(eauth.get('*', []))
+
+            if 'groups' in token and token['groups']:
+                user_groups = set(token['groups'])
+                eauth_groups = set([i.rstrip('%') for i in eauth.keys() if i.endswith('%')])
+
+                for group in user_groups & eauth_groups:
+                    perms.extend(eauth['{0}%'.format(group)])
+
+            if not perms:
+                logger.debug("Eauth permission list not found.")
+        except Exception:
             logger.debug("Configuration for external_auth malformed for "
                 "eauth '{0}', and user '{1}'."
                 .format(token.get('eauth'), token.get('name')), exc_info=True)
-            raise cherrypy.HTTPError(500,
-                'Configuration for external_auth could not be read.')
+            perms = None
 
         return {'return': [{
             'token': cherrypy.session.id,
@@ -1400,7 +1603,7 @@ class Login(LowDataAdapter):
             'start': token['start'],
             'user': token['name'],
             'eauth': token['eauth'],
-            'perms': perms,
+            'perms': perms or {},
         }]}
 
 
@@ -1448,6 +1651,7 @@ class Run(LowDataAdapter):
             request body.
 
             :status 200: |200|
+            :status 400: |400|
             :status 401: |401|
             :status 406: |406|
 
@@ -1498,7 +1702,7 @@ class Run(LowDataAdapter):
 
         All SSH client requests are synchronous.
 
-        ** Example SSH client request:**
+        **Example SSH client request:**
 
         .. code-block:: bash
 
@@ -1547,6 +1751,7 @@ class Events(object):
     Salt infrastructure.
 
     .. seealso:: :ref:`events`
+
     '''
     exposed = True
 
@@ -1580,9 +1785,9 @@ class Events(object):
 
         # First check if the given token is in our session table; if so it's a
         # salt-api token and we need to get the Salt token from there.
-        orig_sesion, _ = cherrypy.session.cache.get(auth_token, ({}, None))
+        orig_session, _ = cherrypy.session.cache.get(auth_token, ({}, None))
         # If it's not in the session table, assume it's a regular Salt token.
-        salt_token = orig_sesion.get('token', auth_token)
+        salt_token = orig_session.get('token', auth_token)
 
         # The eauth system does not currently support perms for the event
         # stream, so we're just checking if the token exists not if the token
@@ -1652,11 +1857,12 @@ class Events(object):
         .. code-block:: javascript
 
             var source = new EventSource('/events');
-            source.onopen = function() { console.debug('opening') };
-            source.onerror = function(e) { console.debug('error!', e) };
-            source.onmessage = function(e) {
-                console.debug('Tag: ', e.data.tag)
-                console.debug('Data: ', e.data.data)
+            source.onopen = function() { console.info('Listening ...') };
+            source.onerror = function(err) { console.error(err) };
+            source.onmessage = function(message) {
+              var saltEvent = JSON.parse(message.data);
+              console.info(saltEvent.tag)
+              console.debug(saltEvent.data)
             };
 
         Or using CORS:
@@ -1719,7 +1925,8 @@ class Events(object):
                     'master',
                     sock_dir=self.opts['sock_dir'],
                     transport=self.opts['transport'],
-                    opts=self.opts)
+                    opts=self.opts,
+                    listen=True)
             stream = event.iter_events(full=True)
 
             yield u'retry: {0}\n'.format(400)
@@ -1769,23 +1976,23 @@ class WebsocketEndpoint(object):
 
         .. http:get:: /ws/(token)
 
-            :query format_events: The event stream will undergo server-side
-                formatting if the ``format_events`` URL parameter is included
-                in the request. This can be useful to avoid formatting on the
-                client-side:
+        :query format_events: The event stream will undergo server-side
+            formatting if the ``format_events`` URL parameter is included
+            in the request. This can be useful to avoid formatting on the
+            client-side:
 
-                .. code-block:: bash
+            .. code-block:: bash
 
-                    curl -NsS <...snip...> localhost:8000/ws?format_events
+                curl -NsS <...snip...> localhost:8000/ws?format_events
 
-            :reqheader X-Auth-Token: an authentication token from
-                :py:class:`~Login`.
+        :reqheader X-Auth-Token: an authentication token from
+            :py:class:`~Login`.
 
-            :status 101: switching to the websockets protocol
-            :status 401: |401|
-            :status 406: |406|
+        :status 101: switching to the websockets protocol
+        :status 401: |401|
+        :status 406: |406|
 
-        **Example request:**
+        **Example request:** ::
 
             curl -NsSk \\
                 -H 'X-Auth-Token: ffedf49d' \\
@@ -1865,8 +2072,8 @@ class WebsocketEndpoint(object):
         # Pulling the session token from an URL param is a workaround for
         # browsers not supporting CORS in the EventSource API.
         if token:
-            orig_sesion, _ = cherrypy.session.cache.get(token, ({}, None))
-            salt_token = orig_sesion.get('token')
+            orig_session, _ = cherrypy.session.cache.get(token, ({}, None))
+            salt_token = orig_session.get('token')
         else:
             salt_token = cherrypy.session.get('token')
 
@@ -1892,7 +2099,8 @@ class WebsocketEndpoint(object):
                     'master',
                     sock_dir=self.opts['sock_dir'],
                     transport=self.opts['transport'],
-                    opts=self.opts)
+                    opts=self.opts,
+                    listen=True)
             stream = event.iter_events(full=True)
             SaltInfo = event_processor.SaltInfo(handler)
             while True:
@@ -2072,7 +2280,9 @@ class Webhook(object):
         '''
         tag = '/'.join(itertools.chain(self.tag_base, args))
         data = cherrypy.serving.request.unserialized_data
-        raw_body = cherrypy.serving.request.raw_body
+        if not data:
+            data = {}
+        raw_body = getattr(cherrypy.serving.request, 'raw_body', '')
         headers = dict(cherrypy.request.headers)
 
         ret = self.event.fire_event({
@@ -2110,6 +2320,13 @@ class Stats(object):
             :status 406: |406|
         '''
         if hasattr(logging, 'statistics'):
+            # Late import
+            try:
+                from cherrypy.lib import cpstats
+            except ImportError:
+                logger.error('Import of cherrypy.cpstats failed. Possible '
+                        'upstream bug here: https://github.com/cherrypy/cherrypy/issues/1444')
+                return {}
             return cpstats.extrapolate_statistics(logging.statistics)
 
         return {}
@@ -2207,6 +2424,8 @@ class API(object):
                 'max_request_body_size': self.apiopts.get(
                     'max_request_body_size', 1048576),
                 'debug': self.apiopts.get('debug', False),
+                'log.access_file': self.apiopts.get('log_access_file', ''),
+                'log.error_file': self.apiopts.get('log_error_file', ''),
             },
             '/': {
                 'request.dispatch': cherrypy.dispatch.MethodDispatcher(),
@@ -2216,9 +2435,16 @@ class API(object):
 
                 'tools.cpstats.on': self.apiopts.get('collect_stats', False),
 
+                'tools.html_override.on': True,
                 'tools.cors_tool.on': True,
             },
         }
+
+        if 'favicon' in self.apiopts:
+            conf['/favicon.ico'] = {
+                'tools.staticfile.on': True,
+                'tools.staticfile.filename': self.apiopts['favicon'],
+            }
 
         if self.apiopts.get('debug', False) is False:
             conf['global']['environment'] = 'production'

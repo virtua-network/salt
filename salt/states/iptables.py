@@ -5,7 +5,7 @@ Management of iptables
 
 This is an iptables-specific module designed to manage Linux firewalls. It is
 expected that this state module, and other system-specific firewall states, may
-at some point be deprecated in favor of a more generic `firewall` state.
+at some point be deprecated in favor of a more generic ``firewall`` state.
 
 .. code-block:: yaml
 
@@ -314,7 +314,7 @@ def append(name, table='filter', family='ipv4', **kwargs):
     '''
     .. versionadded:: 0.17.0
 
-    Append a rule to a chain
+    Add a rule to the end of the specified chain.
 
     name
         A user-defined name to call this rule by in another part of a state or
@@ -330,6 +330,9 @@ def append(name, table='filter', family='ipv4', **kwargs):
     that would normally be used for iptables, with one exception: ``--state`` is
     specified as `connstate` instead of `state` (not to be confused with
     `ctstate`).
+
+    Jump options that doesn't take arguments should be passed in with an empty
+    string.
     '''
     ret = {'name': name,
            'changes': {},
@@ -370,6 +373,7 @@ def append(name, table='filter', family='ipv4', **kwargs):
         if ignore in kwargs:
             del kwargs[ignore]
     kwargs['name'] = name
+    kwargs['table'] = table
     rule = __salt__['iptables.build_rule'](family=family, **kwargs)
     command = __salt__['iptables.build_rule'](full='True', family=family, command='A', **kwargs)
     if __salt__['iptables.check'](table,
@@ -450,10 +454,17 @@ def insert(name, table='filter', family='ipv4', **kwargs):
     family
         Networking family, either ipv4 or ipv6
 
+    position
+        The numerical representation of where the rule should be inserted into
+        the chain. Note that ``-1`` is not a supported position value.
+
     All other arguments are passed in with the same name as the long option
     that would normally be used for iptables, with one exception: ``--state`` is
     specified as `connstate` instead of `state` (not to be confused with
     `ctstate`).
+
+    Jump options that doesn't take arguments should be passed in with an empty
+    string.
     '''
     ret = {'name': name,
            'changes': {},
@@ -494,6 +505,7 @@ def insert(name, table='filter', family='ipv4', **kwargs):
         if ignore in kwargs:
             del kwargs[ignore]
     kwargs['name'] = name
+    kwargs['table'] = table
     rule = __salt__['iptables.build_rule'](family=family, **kwargs)
     command = __salt__['iptables.build_rule'](full=True, family=family, command='I', **kwargs)
     if __salt__['iptables.check'](table,
@@ -574,6 +586,9 @@ def delete(name, table='filter', family='ipv4', **kwargs):
     that would normally be used for iptables, with one exception: ``--state`` is
     specified as `connstate` instead of `state` (not to be confused with
     `ctstate`).
+
+    Jump options that doesn't take arguments should be passed in with an empty
+    string.
     '''
     ret = {'name': name,
            'changes': {},
@@ -613,18 +628,21 @@ def delete(name, table='filter', family='ipv4', **kwargs):
         if ignore in kwargs:
             del kwargs[ignore]
     kwargs['name'] = name
+    kwargs['table'] = table
     rule = __salt__['iptables.build_rule'](family=family, **kwargs)
     command = __salt__['iptables.build_rule'](full=True, family=family, command='D', **kwargs)
+
     if not __salt__['iptables.check'](table,
                                       kwargs['chain'],
                                       rule,
                                       family) is True:
-        ret['result'] = True
-        ret['comment'] = 'iptables rule for {0} already absent for {1} ({2})'.format(
-            name,
-            family,
-            command.strip())
-        return ret
+        if 'position' not in kwargs:
+            ret['result'] = True
+            ret['comment'] = 'iptables rule for {0} already absent for {1} ({2})'.format(
+                name,
+                family,
+                command.strip())
+            return ret
     if __opts__['test']:
         ret['comment'] = 'iptables rule for {0} needs to be deleted for {1} ({2})'.format(
             name,
@@ -755,9 +773,6 @@ def flush(name, table='filter', family='ipv4', **kwargs):
     for ignore in _STATE_INTERNAL_KEYWORDS:
         if ignore in kwargs:
             del kwargs[ignore]
-
-    if 'table' not in kwargs:
-        table = 'filter'
 
     if 'chain' not in kwargs:
         kwargs['chain'] = ''

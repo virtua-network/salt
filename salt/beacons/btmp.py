@@ -14,7 +14,7 @@ import os
 import struct
 
 # Import Salt Libs
-from salt.ext.six.moves import range  # pylint: disable=import-error,redefined-builtin
+import salt.utils
 
 __virtualname__ = 'btmp'
 BTMP = '/var/log/btmp'
@@ -49,14 +49,15 @@ def _get_loc():
         return __context__[LOC_KEY]
 
 
-def validate(config):
+def __validate__(config):
     '''
     Validate the beacon configuration
     '''
     # Configuration for load beacon should be a list of dicts
     if not isinstance(config, dict):
-        return False
-    return True
+        return False, ('Configuration for btmp beacon must '
+                       'be a list of dictionaries.')
+    return True, 'Valid beacon configuration'
 
 
 # TODO: add support for only firing events for specific users and login times
@@ -70,7 +71,7 @@ def beacon(config):
           btmp: {}
     '''
     ret = []
-    with open(BTMP, 'rb') as fp_:
+    with salt.utils.fopen(BTMP, 'rb') as fp_:
         loc = __context__.get(LOC_KEY, 0)
         if loc == 0:
             fp_.seek(0, 2)
@@ -85,9 +86,9 @@ def beacon(config):
             __context__[LOC_KEY] = fp_.tell()
             pack = struct.unpack(FMT, raw)
             event = {}
-            for ind in range(len(FIELDS)):
-                event[FIELDS[ind]] = pack[ind]
-                if isinstance(event[FIELDS[ind]], str):
-                    event[FIELDS[ind]] = event[FIELDS[ind]].strip('\x00')
+            for ind, field in enumerate(FIELDS):
+                event[field] = pack[ind]
+                if isinstance(event[field], str):
+                    event[field] = event[field].strip('\x00')
             ret.append(event)
     return ret

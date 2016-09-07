@@ -3,7 +3,7 @@
 '''
 Provide authentication using YubiKey.
 
-.. versionadded:: 2015.2.0
+.. versionadded:: 2015.5.0
 
 :depends: yubico-client Python module
 
@@ -71,7 +71,7 @@ def __get_yubico_users(username):
 
 def auth(username, password):
     '''
-    Authentcate against yubico server
+    Authenticate against yubico server
     '''
     _cred = __get_yubico_users(username)
 

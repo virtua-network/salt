@@ -12,6 +12,13 @@ a user against the Pluggable Authentication Modules (PAM) on the system.
 
 Implemented using ctypes, so no compilation is necessary.
 
+There is one extra configuration option for pam.  The `pam_service` that is
+authenticated against.  This defaults to `login`
+
+.. code-block:: yaml
+
+    auth.pam.service: login
+
 .. note:: PAM authentication will not work for the ``root`` user.
 
     The Python interface to PAM does not support authenticating as ``root``.
@@ -24,12 +31,12 @@ from ctypes import CDLL, POINTER, Structure, CFUNCTYPE, cast, pointer, sizeof
 from ctypes import c_void_p, c_uint, c_char_p, c_char, c_int
 from ctypes.util import find_library
 
-# Import Salt Libs
+# Import Salt libs
 from salt.utils import get_group_list
 from salt.ext.six.moves import range  # pylint: disable=import-error,redefined-builtin
 
-LIBPAM = CDLL(find_library("pam"))
-LIBC = CDLL(find_library("c"))
+LIBPAM = CDLL(find_library('pam'))
+LIBC = CDLL(find_library('c'))
 
 CALLOC = LIBC.calloc
 CALLOC.restype = c_void_p
@@ -51,7 +58,7 @@ class PamHandle(Structure):
     Wrapper class for pam_handle_t
     '''
     _fields_ = [
-            ("handle", c_void_p)
+            ('handle', c_void_p)
             ]
 
     def __init__(self):
@@ -65,11 +72,11 @@ class PamMessage(Structure):
     '''
     _fields_ = [
             ("msg_style", c_int),
-            ("msg", POINTER(c_char)),
+            ("msg", c_char_p),
             ]
 
     def __repr__(self):
-        return "<PamMessage {0:d} '{1}'>".format(self.msg_style, self.msg)
+        return '<PamMessage {0} \'{1}\'>'.format(self.msg_style, self.msg)
 
 
 class PamResponse(Structure):
@@ -77,12 +84,13 @@ class PamResponse(Structure):
     Wrapper class for pam_response structure
     '''
     _fields_ = [
-            ("resp", POINTER(c_char)),
-            ("resp_retcode", c_int),
+            ('resp', c_char_p),
+            ('resp_retcode', c_int),
             ]
 
     def __repr__(self):
-        return "<PamResponse {0:d} '{1}'>".format(self.resp_retcode, self.resp)
+        return '<PamResponse {0} \'{1}\'>'.format(self.resp_retcode, self.resp)
+
 
 CONV_FUNC = CFUNCTYPE(c_int,
         c_int, POINTER(POINTER(PamMessage)),
@@ -94,35 +102,28 @@ class PamConv(Structure):
     Wrapper class for pam_conv structure
     '''
     _fields_ = [
-            ("conv", CONV_FUNC),
-            ("appdata_ptr", c_void_p)
+            ('conv', CONV_FUNC),
+            ('appdata_ptr', c_void_p)
             ]
+
 
 try:
     PAM_START = LIBPAM.pam_start
     PAM_START.restype = c_int
     PAM_START.argtypes = [c_char_p, c_char_p, POINTER(PamConv),
-        POINTER(PamHandle)]
-
-    PAM_END = LIBPAM.pam_end
-    PAM_END.restpe = c_int
-    PAM_END.argtypes = [PamHandle, c_int]
+            POINTER(PamHandle)]
 
     PAM_AUTHENTICATE = LIBPAM.pam_authenticate
     PAM_AUTHENTICATE.restype = c_int
     PAM_AUTHENTICATE.argtypes = [PamHandle, c_int]
 
-    PAM_SETCRED = LIBPAM.pam_setcred
-    PAM_SETCRED.restype = c_int
-    PAM_SETCRED.argtypes = [PamHandle, c_int]
+    PAM_ACCT_MGMT = LIBPAM.pam_acct_mgmt
+    PAM_ACCT_MGMT.restype = c_int
+    PAM_ACCT_MGMT.argtypes = [PamHandle, c_int]
 
-    PAM_OPEN_SESSION = LIBPAM.pam_open_session
-    PAM_OPEN_SESSION.restype = c_int
-    PAM_OPEN_SESSION.argtypes = [PamHandle, c_int]
-
-    PAM_CLOSE_SESSION = LIBPAM.pam_close_session
-    PAM_CLOSE_SESSION.restype = c_int
-    PAM_CLOSE_SESSION.argtypes = [PamHandle, c_int]
+    PAM_END = LIBPAM.pam_end
+    PAM_END.restype = c_int
+    PAM_END.argtypes = [PamHandle, c_int]
 except Exception:
     HAS_PAM = False
 else:
@@ -136,7 +137,7 @@ def __virtual__():
     return HAS_PAM
 
 
-def authenticate(username, password, service='login'):
+def authenticate(username, password):
     '''
     Returns True if the given username and password authenticate for the
     given service.  Returns False otherwise
@@ -144,10 +145,9 @@ def authenticate(username, password, service='login'):
     ``username``: the username to authenticate
 
     ``password``: the password in plain text
-
-    ``service``: the PAM service to authenticate against.
-                 Defaults to 'login'
     '''
+    service = __opts__.get('auth.pam.service', 'login')
+
     @CONV_FUNC
     def my_conv(n_messages, messages, p_response, app_data):
         '''
@@ -160,7 +160,7 @@ def authenticate(username, password, service='login'):
         for i in range(n_messages):
             if messages[i].contents.msg_style == PAM_PROMPT_ECHO_OFF:
                 pw_copy = STRDUP(str(password))
-                p_response.contents[i].resp = pw_copy
+                p_response.contents[i].resp = cast(pw_copy, c_char_p)
                 p_response.contents[i].resp_retcode = 0
         return 0
 
@@ -175,26 +175,9 @@ def authenticate(username, password, service='login'):
         return False
 
     retval = PAM_AUTHENTICATE(handle, 0)
-    if retval != 0:
-        PAM_END(handle, retval)
-        return False
-
-    retval = PAM_SETCRED(handle, 0)
-    if retval != 0:
-        PAM_END(handle, retval)
-        return False
-
-    retval = PAM_OPEN_SESSION(handle, 0)
-    if retval != 0:
-        PAM_END(handle, retval)
-        return False
-
-    retval = PAM_CLOSE_SESSION(handle, 0)
-    if retval != 0:
-        PAM_END(handle, retval)
-        return False
-
-    retval = PAM_END(handle, retval)
+    if retval == 0:
+        PAM_ACCT_MGMT(handle, 0)
+    PAM_END(handle, 0)
     return retval == 0
 
 
@@ -202,7 +185,7 @@ def auth(username, password, **kwargs):
     '''
     Authenticate via pam
     '''
-    return authenticate(username, password, kwargs.get('service', 'login'))
+    return authenticate(username, password)
 
 
 def groups(username, *args, **kwargs):

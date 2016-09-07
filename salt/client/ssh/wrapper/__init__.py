@@ -35,6 +35,7 @@ class FunctionWrapper(object):
             fsclient=None,
             cmd_prefix=None,
             aliases=None,
+            minion_opts=None,
             **kwargs):
         super(FunctionWrapper, self).__init__()
         self.cmd_prefix = cmd_prefix
@@ -48,6 +49,7 @@ class FunctionWrapper(object):
         self.aliases = aliases
         if self.aliases is None:
             self.aliases = {}
+        self.minion_opts = minion_opts
 
     def __contains__(self, key):
         '''
@@ -81,6 +83,7 @@ class FunctionWrapper(object):
                                    fsclient=self.fsclient,
                                    cmd_prefix=cmd,
                                    aliases=self.aliases,
+                                   minion_opts=self.minion_opts,
                                    **kwargs)
 
         if self.cmd_prefix:
@@ -100,21 +103,23 @@ class FunctionWrapper(object):
             The remote execution function
             '''
             argv = [cmd]
-            argv.extend([str(arg) for arg in args])
-            argv.extend(['{0}={1}'.format(key, val) for key, val in six.iteritems(kwargs)])
+            argv.extend([json.dumps(arg) for arg in args])
+            argv.extend(['{0}={1}'.format(key, json.dumps(val)) for key, val in six.iteritems(kwargs)])
             single = salt.client.ssh.Single(
                     self.opts,
                     argv,
                     mods=self.mods,
                     wipe=True,
                     fsclient=self.fsclient,
+                    minion_opts=self.minion_opts,
                     **self.kwargs
             )
-            stdout, stderr, _ = single.cmd_block()
+            stdout, stderr, retcode = single.cmd_block()
             if stderr.count('Permission Denied'):
                 return {'_error': 'Permission Denied',
                         'stdout': stdout,
-                        'stderr': stderr}
+                        'stderr': stderr,
+                        'retcode': retcode}
             try:
                 ret = json.loads(stdout, object_hook=salt.utils.decode_dict)
                 if len(ret) < 2 and 'local' in ret:
@@ -123,7 +128,8 @@ class FunctionWrapper(object):
             except ValueError:
                 ret = {'_error': 'Failed to return clean data',
                        'stderr': stderr,
-                       'stdout': stdout}
+                       'stdout': stdout,
+                       'retcode': retcode}
             return ret
         return caller
 

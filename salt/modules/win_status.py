@@ -9,19 +9,23 @@ or for problem solving if your minion is having problems.
 :depends:   - pythoncom
             - wmi
 '''
-from __future__ import absolute_import
 
-import subprocess
+# Import Python Libs
+from __future__ import absolute_import
 import logging
+
+# Import Salt Libs
 import salt.utils
 import salt.ext.six as six
 import salt.utils.event
+from salt._compat import subprocess
 from salt.utils.network import host_to_ip as _host_to_ip
 
 import os
 import ctypes
 import sys
 import time
+import datetime
 from subprocess import list2cmdline
 
 log = logging.getLogger(__name__)
@@ -48,12 +52,12 @@ def __virtual__():
     '''
     if salt.utils.is_windows() and has_required_packages:
         return __virtualname__
-    return False
+    return (False, 'Cannot load win_status module on non-windows')
 
 
 def cpuload():
     '''
-    .. versionadded:: Beryllium
+    .. versionadded:: 2015.8.0
 
     Return the processor load as a percentage
 
@@ -61,7 +65,7 @@ def cpuload():
 
     .. code-block:: bash
 
-       salt '*' status.cpu_load
+       salt '*' status.cpuload
     '''
 
     # Pull in the information from WMIC
@@ -80,7 +84,7 @@ def cpuload():
 
 def diskusage(human_readable=False, path=None):
     '''
-    .. versionadded:: Beryllium
+    .. versionadded:: 2015.8.0
 
     Return the disk usage for this minion
 
@@ -91,7 +95,7 @@ def diskusage(human_readable=False, path=None):
 
     .. code-block:: bash
 
-        salt '*' status.disk_usage path=c:/salt
+        salt '*' status.diskusage path=c:/salt
     '''
     if not path:
         path = 'c:/'
@@ -128,7 +132,7 @@ def procs(count=False):
     count : False
         If ``True``, this function will simply return the number of processes.
 
-        .. versionadded:: Beryllium
+        .. versionadded:: 2015.8.0
 
     CLI Example:
 
@@ -155,19 +159,19 @@ def procs(count=False):
 
 def saltmem(human_readable=False):
     '''
-    .. versionadded:: Beryllium
+    .. versionadded:: 2015.8.0
 
     Returns the amount of memory that salt is using
 
     human_readable : False
-        return the value in a nicely formated number
+        return the value in a nicely formatted number
 
     CLI Example:
 
-    .. code-black:: bash
+    .. code-block:: bash
 
-        salt '*' status.salt_mem
-        salt '*' status.salt_mem human_readable=True
+        salt '*' status.saltmem
+        salt '*' status.saltmem human_readable=True
     '''
     with salt.utils.winapi.Com():
         wmi_obj = wmi.WMI()
@@ -183,13 +187,12 @@ def saltmem(human_readable=False):
 
 def uptime(human_readable=False):
     '''
-    .. versionadded:: Beryllium
+    .. versionadded:: 2015.8.0
 
     Return the system uptime for this machine in seconds
 
     human_readable : False
-        If ``True``, then the number of seconds will be translated into years,
-        months, days, etc.
+        If ``True``, then return uptime in years, days, and seconds.
 
     CLI Example:
 
@@ -200,61 +203,35 @@ def uptime(human_readable=False):
     '''
 
     # Open up a subprocess to get information from WMIC
-    cmd = list2cmdline(['net', 'stats', 'srv'])
+    cmd = list2cmdline(['wmic', 'os', 'get', 'lastbootuptime'])
     outs = __salt__['cmd.run'](cmd)
 
     # Get the line that has when the computer started in it:
     stats_line = ''
-    for line in outs.split('\r\n'):
-        if "Statistics since" in line:
-            stats_line = line
+    # use second line from output
+    stats_line = outs.split('\r\n')[1]
 
     # Extract the time string from the line and parse
     #
-    # Get string
-    startup_time = stats_line[len('Statistics Since '):]
-    # Convert to struct
-    startup_time = time.strptime(startup_time, '%d/%m/%Y %H:%M:%S')
-    # eonvert to seconds since epoch
-    startup_time = time.mktime(startup_time)
+    # Get string, just use the leading 14 characters
+    startup_time = stats_line[:14]
+    # Convert to time struct
+    startup_time = time.strptime(startup_time, '%Y%m%d%H%M%S')
+    # Convert to datetime object
+    startup_time = datetime.datetime(*startup_time[:6])
 
     # Subtract startup time from current time to get the uptime of the system
-    uptime = time.time() - startup_time
+    uptime = datetime.datetime.now() - startup_time
 
-    if human_readable:
-        # Pull out the majority of the uptime tuple. h:m:s
-        uptime = int(uptime)
-        seconds = uptime % 60
-        uptime /= 60
-        minutes = uptime % 60
-        uptime /= 60
-        hours = uptime % 24
-        uptime /= 24
-
-        # Translate the h:m:s from above into HH:MM:SS format.
-        ret = '{0:0>2}:{1:0>2}:{2:0>2}'.format(hours, minutes, seconds)
-
-        # If the minion has been on for days, add that in.
-        if uptime > 0:
-            ret = 'Days: {0} {1}'.format(uptime % 365, ret)
-
-        # If you have a Windows minion that has been up for years,
-        # my hat is off to you sir.
-        if uptime > 365:
-            ret = 'Years: {0} {1}'.format(uptime / 365, ret)
-
-        return ret
-
-    else:
-        return uptime
+    return str(uptime) if human_readable else uptime.total_seconds()
 
 
 def _get_process_info(proc):
     '''
     Return  process information
     '''
-    cmd = (proc.CommandLine or '').encode('utf-8')
-    name = proc.Name.encode('utf-8')
+    cmd = salt.utils.to_str(proc.CommandLine or '')
+    name = salt.utils.to_str(proc.Name)
     info = dict(
         cmd=cmd,
         name=name,
@@ -268,13 +245,13 @@ def _get_process_owner(process):
     domain, error_code, user = None, None, None
     try:
         domain, error_code, user = process.GetOwner()
-        owner['user'] = user.encode('utf-8')
-        owner['user_domain'] = domain.encode('utf-8')
+        owner['user'] = salt.utils.to_str(user)
+        owner['user_domain'] = salt.utils.to_str(domain)
     except Exception as exc:
         pass
     if not error_code and all((user, domain)):
-        owner['user'] = user.encode('utf-8')
-        owner['user_domain'] = domain.encode('utf-8')
+        owner['user'] = salt.utils.to_str(user)
+        owner['user_domain'] = salt.utils.to_str(domain)
     elif process.ProcessId in [0, 4] and error_code == 2:
         # Access Denied for System Idle Process and System
         owner['user'] = 'SYSTEM'
@@ -301,7 +278,7 @@ def _byte_calc(val):
 
 def master(master=None, connected=True):
     '''
-    .. versionadded:: 2015.2.0
+    .. versionadded:: 2015.5.0
 
     Fire an event if the minion gets disconnected from its master. This
     function is meant to be run via a scheduled job from the minion. If
@@ -336,12 +313,12 @@ def master(master=None, connected=True):
         '''
         remotes = set()
         try:
-            data = subprocess.check_output(['netstat', '-n', '-p', 'TCP'])
+            data = subprocess.check_output(['netstat', '-n', '-p', 'TCP'])  # pylint: disable=minimum-python-version
         except subprocess.CalledProcessError:
             log.error('Failed netstat')
             raise
 
-        lines = data.split('\n')
+        lines = salt.utils.to_str(data).split('\n')
         for line in lines:
             if 'ESTABLISHED' not in line:
                 continue

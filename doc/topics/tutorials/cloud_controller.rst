@@ -59,7 +59,7 @@ to set up the libvirt pki keys.
         - contents: 'LIBVIRTD_ARGS="--listen"'
         - require:
           - pkg: libvirt
-      libvirt.keys:
+      virt.keys:
         - require:
           - pkg: libvirt
       service.running:
@@ -139,7 +139,7 @@ date:
 .. code-block:: yaml
 
     libvirt_keys:
-      libvirt.keys
+      virt.keys
 
 Getting Virtual Machine Images Ready
 ====================================
@@ -153,6 +153,9 @@ the installer, but this process is not recommended since it is very manual and
 prone to errors.
 
 Virtual Machine generation applications are available for many platforms:
+
+kiwi: (openSUSE, SLES, RHEL, CentOS)
+  https://suse.github.io/kiwi/
 
 vm-builder:
   https://wiki.debian.org/VMBuilder
@@ -184,6 +187,18 @@ Fedora Linux
 
 Images for Fedora Linux can be found here:
 http://fedoraproject.org/en/get-fedora#clouds
+
+openSUSE
+~~~~~~~~
+
+http://download.opensuse.org/repositories/openSUSE:/Leap:/42.1:/Images/images
+
+(look for JeOS-for-kvm-and-xen variant)
+
+SUSE
+~~~~
+
+https://www.suse.com/products/server/jeos
 
 Ubuntu Linux
 ~~~~~~~~~~~~

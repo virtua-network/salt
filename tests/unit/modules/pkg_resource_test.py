@@ -19,6 +19,7 @@ from salttesting.mock import (
 # Import Salt Libs
 import salt.utils
 from salt.modules import pkg_resource
+import salt.ext.six as six
 
 # Globals
 pkg_resource.__grains__ = {}
@@ -75,12 +76,12 @@ class PkgresTestCase(TestCase):
                                  (None, None))
 
             with patch.object(pkg_resource, 'pack_sources',
-                              return_value={'A': 'a'}):
+                              return_value={'A': '/a'}):
                 with patch.dict(pkg_resource.__salt__,
                                 {'config.valid_fileproto':
                                  MagicMock(return_value=False)}):
                     self.assertEqual(pkg_resource.parse_targets(sources='s'),
-                                     (['a'], 'file'))
+                                     (['/a'], 'file'))
 
             with patch.object(pkg_resource, 'pack_sources',
                               return_value={'A': 'a'}):
@@ -108,7 +109,7 @@ class PkgresTestCase(TestCase):
 
             mock = MagicMock(return_value={})
             with patch.dict(pkg_resource.__salt__, {'pkg.list_pkgs': mock}):
-                with patch('__builtin__.next') as mock_next:
+                with patch('builtins.next' if six.PY3 else '__builtin__.next') as mock_next:
                     mock_next.side_effect = StopIteration()
                     self.assertEqual(pkg_resource.version('A'), '')
 
@@ -116,7 +117,7 @@ class PkgresTestCase(TestCase):
         '''
             Test to add a package to a dict of installed packages.
         '''
-        self.assertIsNone(pkg_resource.add_pkg('pkgs', 'name', 'version'))
+        self.assertIsNone(pkg_resource.add_pkg({'pkgs': []}, 'name', 'version'))
 
     def test_sort_pkglist(self):
         '''

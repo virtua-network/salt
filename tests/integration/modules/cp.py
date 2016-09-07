@@ -3,20 +3,23 @@
 # Import python libs
 from __future__ import absolute_import
 import os
+import uuid
 import hashlib
+import tempfile
 
 # Import Salt Testing libs
 from salttesting.helpers import ensure_in_syspath
 ensure_in_syspath('../../')
 
 # Import salt libs
+import salt.ext.six as six
 import integration
 import salt.utils
 
 
 class CPModuleTest(integration.ModuleCase):
     '''
-    Validate the test module
+    Validate the cp module
     '''
     def test_get_file(self):
         '''
@@ -59,7 +62,10 @@ class CPModuleTest(integration.ModuleCase):
         tgt = os.path.join(integration.TMP, 'file.big')
         src = os.path.join(integration.FILES, 'file/base/file.big')
         with salt.utils.fopen(src, 'r') as fp_:
-            hash = hashlib.md5(fp_.read()).hexdigest()
+            data = fp_.read()
+            if six.PY3:
+                data = salt.utils.to_bytes(data)
+            hash_str = hashlib.md5(data).hexdigest()
 
         self.run_function(
             'cp.get_file',
@@ -73,7 +79,7 @@ class CPModuleTest(integration.ModuleCase):
             data = scene.read()
             self.assertIn('KNIGHT:  They\'re nervous, sire.', data)
             self.assertNotIn('bacon', data)
-            self.assertEqual(hash, hashlib.md5(data).hexdigest())
+            self.assertEqual(hash_str, hashlib.md5(data).hexdigest())
 
     def test_get_file_makedirs(self):
         '''
@@ -145,9 +151,8 @@ class CPModuleTest(integration.ModuleCase):
 
     def test_get_url(self):
         '''
-        cp.get_url
+        cp.get_url with salt:// source
         '''
-        # We should add a 'if the internet works download some files'
         tgt = os.path.join(integration.TMP, 'scene33')
         self.run_function(
                 'cp.get_url',
@@ -159,6 +164,42 @@ class CPModuleTest(integration.ModuleCase):
             data = scene.read()
             self.assertIn('KNIGHT:  They\'re nervous, sire.', data)
             self.assertNotIn('bacon', data)
+
+    def test_get_url_makedirs(self):
+        '''
+        cp.get_url
+        '''
+        tgt = os.path.join(integration.TMP, 'make/dirs/scene33')
+        self.run_function(
+               'cp.get_url',
+                [
+                    'salt://grail/scene33',
+                    tgt,
+                ],
+                makedirs=True
+            )
+        with salt.utils.fopen(tgt, 'r') as scene:
+            data = scene.read()
+            self.assertIn('KNIGHT:  They\'re nervous, sire.', data)
+            self.assertNotIn('bacon', data)
+
+    def test_get_url_https(self):
+        '''
+        cp.get_url with https:// source
+        '''
+        tgt = os.path.join(integration.TMP, 'test_get_url_https')
+        self.run_function(
+                'cp.get_url',
+                [
+                    'https://repo.saltstack.com/index.html',
+                    tgt,
+                ])
+        with salt.utils.fopen(tgt, 'r') as instructions:
+            data = instructions.read()
+            self.assertIn('Bootstrap', data)
+            self.assertIn('Debian', data)
+            self.assertIn('Windows', data)
+            self.assertNotIn('AYBABTU', data)
 
     def test_cache_file(self):
         '''
@@ -233,8 +274,11 @@ class CPModuleTest(integration.ModuleCase):
                 ])
         ret = self.run_function('cp.list_minion')
         found = False
+        search = 'grail/scene33'
+        if salt.utils.is_windows():
+            search = r'grail\scene33'
         for path in ret:
-            if 'grail/scene33' in path:
+            if search in path:
                 found = True
         self.assertTrue(found)
 
@@ -264,7 +308,7 @@ class CPModuleTest(integration.ModuleCase):
         '''
         cp.hash_file
         '''
-        md5_hash = self.run_function(
+        sha256_hash = self.run_function(
                 'cp.hash_file',
                 [
                     'salt://grail/scene33',
@@ -275,10 +319,11 @@ class CPModuleTest(integration.ModuleCase):
                     'salt://grail/scene33',
                 ])
         with salt.utils.fopen(path, 'r') as fn_:
+            data = fn_.read()
+            if six.PY3:
+                data = salt.utils.to_bytes(data)
             self.assertEqual(
-                    md5_hash['hsum'],
-                    hashlib.md5(fn_.read()).hexdigest()
-                    )
+                sha256_hash['hsum'], hashlib.sha256(data).hexdigest())
 
     def test_get_file_from_env_predefined(self):
         '''
@@ -305,6 +350,23 @@ class CPModuleTest(integration.ModuleCase):
         finally:
             os.unlink(tgt)
 
+    def test_push(self):
+        log_to_xfer = os.path.join(tempfile.gettempdir(), uuid.uuid4().hex)
+        open(log_to_xfer, 'w').close()
+        try:
+            self.run_function('cp.push', log_to_xfer)
+            tgt_cache_file = os.path.join(
+                 integration.TMP,
+                'master-minion-root',
+                'cache',
+                'minions',
+                'minion',
+                'files',
+                tempfile.gettempdir(),
+                log_to_xfer)
+            self.assertTrue(os.path.isfile(tgt_cache_file), 'File was not cached on the master')
+        finally:
+            os.unlink(tgt_cache_file)
 
 if __name__ == '__main__':
     from integration import run_tests

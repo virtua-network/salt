@@ -14,7 +14,7 @@ def __virtual__():
     '''
     if __grains__['os'] == 'Gentoo' and salt.utils.which('layman'):
         return 'layman'
-    return False
+    return (False, 'layman execution module cannot be loaded: only available on Gentoo with layman installed.')
 
 
 def _get_makeconf():
@@ -47,7 +47,7 @@ def add(overlay):
     ret = list()
     old_overlays = list_local()
     cmd = 'layman --quietness=0 --add {0}'.format(overlay)
-    add_attempt = __salt__['cmd.run_all'](cmd, python_shell=False)
+    add_attempt = __salt__['cmd.run_all'](cmd, python_shell=False, stdin='y')
     if add_attempt['retcode'] != 0:
         raise salt.exceptions.CommandExecutionError(add_attempt['stdout'])
     new_overlays = list_local()

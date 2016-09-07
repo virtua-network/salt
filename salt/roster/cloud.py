@@ -3,11 +3,19 @@
 Use the cloud cache on the master to derive IPv4 addresses based on minion ID.
 
 This roster requires that the minion in question was created using at least the
-2015.2.0 version of Salt Cloud. Starting with the 2015.2.0 release, Salt Cloud
+2015.5.0 version of Salt Cloud. Starting with the 2015.5.0 release, Salt Cloud
 maintains an index of minions that it creates and deletes. This index tracks the
 provider and profile configuration used to provision the minion, including
 authentication information. So long as this configuration remains current, it can
 be used by Salt SSH to log into any minion in the index.
+
+To connect as a user other than root, modify the cloud configuration file
+usually located at /etc/salt/cloud. For example, add the following:
+
+.. code-block:: yaml
+
+    ssh_username: my_user
+    sudo: True
 '''
 
 # Import python libs
@@ -99,6 +107,12 @@ def targets(tgt, tgt_type='glob', **kwargs):  # pylint: disable=W0613
     )
     if key_filename:
         ret['tgt']['priv'] = key_filename
+
+    sudo = salt.config.get_cloud_config_value(
+        'sudo', vm_, cloud_opts, search_global=False, default=None
+    )
+    if sudo:
+        ret['tgt']['sudo'] = sudo
 
     return ret
 

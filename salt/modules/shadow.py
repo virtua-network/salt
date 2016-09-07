@@ -1,6 +1,12 @@
 # -*- coding: utf-8 -*-
 '''
-Manage the shadow file
+Manage the shadow file on Linux systems
+
+.. important::
+    If you feel that Salt should be using this module to manage passwords on a
+    minion, and it is using a different module (or gives an error similar to
+    *'shadow.info' is not available*), see :ref:`here
+    <module-provider-override>`.
 '''
 from __future__ import absolute_import
 
@@ -92,6 +98,7 @@ def set_inactdays(name, inactdays):
     post_info = info(name)
     if post_info['inact'] != pre_info['inact']:
         return post_info['inact'] == inactdays
+    return False
 
 
 def set_maxdays(name, maxdays):
@@ -113,6 +120,7 @@ def set_maxdays(name, maxdays):
     post_info = info(name)
     if post_info['max'] != pre_info['max']:
         return post_info['max'] == maxdays
+    return False
 
 
 def set_mindays(name, mindays):
@@ -141,6 +149,12 @@ def gen_password(password, crypt_salt=None, algorithm='sha512'):
     .. versionadded:: 2014.7.0
 
     Generate hashed password
+
+    .. note::
+
+        When called this function is called directly via remote-execution,
+        the password argument may be displayed in the system's process list.
+        This may be a security risk on certain systems.
 
     password
         Plaintext password to be hashed.
@@ -187,7 +201,59 @@ def del_password(name):
     cmd = 'passwd -d {0}'.format(name)
     __salt__['cmd.run'](cmd, python_shell=False, output_loglevel='quiet')
     uinfo = info(name)
-    return not uinfo['passwd']
+    return not uinfo['passwd'] and uinfo['name'] == name
+
+
+def lock_password(name):
+    '''
+    .. versionadded:: Carbon
+
+    Lock the password from name user
+
+    CLI Example:
+
+    .. code-block:: bash
+
+        salt '*' shadow.lock_password username
+    '''
+    pre_info = info(name)
+    if pre_info['name'] == '':
+        return False
+    if pre_info['passwd'][0] == '!':
+        return True
+
+    cmd = 'passwd -l {0}'.format(name)
+    __salt__['cmd.run'](cmd, python_shell=False)
+
+    post_info = info(name)
+
+    return post_info['passwd'][0] == '!'
+
+
+def unlock_password(name):
+    '''
+    .. versionadded:: Carbon
+
+    Unlock the password from name user
+
+    CLI Example:
+
+    .. code-block:: bash
+
+        salt '*' shadow.unlock_password username
+    '''
+    pre_info = info(name)
+    if pre_info['name'] == '':
+        return False
+    if pre_info['passwd'][0] != '!':
+        return True
+
+    cmd = 'passwd -u {0}'.format(name)
+    __salt__['cmd.run'](cmd, python_shell=False)
+
+    post_info = info(name)
+
+    return post_info['passwd'][0] != '!'
 
 
 def set_password(name, password, use_usermod=False):
@@ -279,7 +345,7 @@ def set_date(name, date):
         salt '*' shadow.set_date username 0
     '''
     cmd = 'chage -d {0} {1}'.format(date, name)
-    __salt__['cmd.run'](cmd, python_shell=False)
+    return not __salt__['cmd.run'](cmd, python_shell=False)
 
 
 def set_expire(name, expire):
@@ -297,4 +363,4 @@ def set_expire(name, expire):
         salt '*' shadow.set_expire username -1
     '''
     cmd = 'chage -E {0} {1}'.format(expire, name)
-    __salt__['cmd.run'](cmd, python_shell=False)
+    return not __salt__['cmd.run'](cmd, python_shell=False)

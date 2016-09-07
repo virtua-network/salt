@@ -7,10 +7,19 @@ An execution module which can manipulate an f5 bigip via iControl REST
 
 # Import python libs
 from __future__ import absolute_import
-import requests
-import requests.exceptions
 import json
 import logging as logger
+
+# Import third party libs
+try:
+    import requests
+    import requests.exceptions
+    HAS_LIBS = True
+except ImportError:
+    HAS_LIBS = False
+
+# Import 3rd-party libs
+import salt.ext.six as six
 
 # Import salt libs
 import salt.utils
@@ -20,16 +29,24 @@ import salt.exceptions
 # Setup the logger
 log = logger.getLogger(__name__)
 
+# Define the module's virtual name
+__virtualname__ = 'bigip'
 
-# Setup Virtual Function
+
 def __virtual__():
-    return 'bigip'
+    '''
+    Only return if requests is installed
+    '''
+    if HAS_LIBS:
+        return __virtualname__
+    return (False, 'The bigip execution module cannot be loaded: '
+            'python requests library not available.')
 
 
 BIG_IP_URL_BASE = 'https://{host}/mgmt/tm'
 
 
-def _build_session(username, password):
+def _build_session(username, password, trans_label=None):
     '''
     Create a session to be used when connecting to iControl REST.
     '''
@@ -38,6 +55,15 @@ def _build_session(username, password):
     bigip.auth = (username, password)
     bigip.verify = False
     bigip.headers.update({'Content-Type': 'application/json'})
+
+    if trans_label:
+        #pull the trans id from the grain
+        trans_id = __salt__['grains.get']('bigip_f5_trans:{label}'.format(label=trans_label))
+
+        if trans_id:
+            bigip.headers.update({'X-F5-REST-Coordination-Id': trans_id})
+        else:
+            bigip.headers.update({'X-F5-REST-Coordination-Id': None})
 
     return bigip
 
@@ -52,7 +78,19 @@ def _load_response(response):
     except ValueError:
         data = response.text
 
-    return data
+    ret = {'code': response.status_code, 'content': data}
+
+    return ret
+
+
+def _load_connection_error(hostname, error):
+    '''
+    Format and Return a connection error
+    '''
+
+    ret = {'code': None, 'content': 'Error: Unable to connect to the bigip device: {host}\n{error}'.format(host=hostname, error=error)}
+
+    return ret
 
 
 def _loop_payload(params):
@@ -65,7 +103,7 @@ def _loop_payload(params):
     payload = {}
 
     #set the payload
-    for param, value in params.iteritems():
+    for param, value in six.iteritems(params):
         if value is not None:
             payload[param] = value
 
@@ -109,21 +147,19 @@ def _determine_toggles(payload, toggles):
     Figure out what it likes to hear without confusing the user.
     '''
 
-    for toggle, definition in toggles.iteritems():
-
+    for toggle, definition in six.iteritems(toggles):
         #did the user specify anything?
         if definition['value'] is not None:
-
             #test for yes_no toggle
-            if definition['value'] is True and definition['type'] == 'yes_no':
+            if (definition['value'] is True or definition['value'] == 'yes') and definition['type'] == 'yes_no':
                 payload[toggle] = 'yes'
-            elif definition['value'] is False and definition['type'] == 'yes_no':
-                payload[toggle] = 'yes'
+            elif (definition['value'] is False or definition['value'] == 'no') and definition['type'] == 'yes_no':
+                payload[toggle] = 'no'
 
             #test for true_false toggle
-            if definition['value'] is True and definition['type'] == 'true_false':
+            if (definition['value'] is True or definition['value'] == 'yes') and definition['type'] == 'true_false':
                 payload[toggle] = True
-            elif definition['value'] is False and definition['type'] == 'yes_no':
+            elif (definition['value'] is False or definition['value'] == 'no') and definition['type'] == 'true_false':
                 payload[toggle] = False
 
     return payload
@@ -135,7 +171,8 @@ def _set_value(value):
     dictionary list or a string
     '''
 
-    #dont continue if bool
+    logger.error(value)
+    #don't continue if already an acceptable data-type
     if isinstance(value, bool) or isinstance(value, dict) or isinstance(value, list):
         return value
 
@@ -190,21 +227,195 @@ def _set_value(value):
         return value
 
 
-def list_node(hostname, username, password, name=None):
+def start_transaction(hostname, username, password, label):
+    '''
+    A function to connect to a bigip device and start a new transaction.
+
+    hostname
+        The host/address of the bigip device
+    username
+        The iControl REST username
+    password
+        The iControl REST password
+    label
+        The name / alias for this transaction.  The actual transaction
+        id will be stored within a grain called ``bigip_f5_trans:<label>``
+
+    CLI Example::
+
+        salt '*' bigip.start_transaction bigip admin admin my_transaction
+
+    '''
+
+    #build the session
+    bigip_session = _build_session(username, password)
+
+    payload = {}
+
+    #post to REST to get trans id
+    try:
+        response = bigip_session.post(BIG_IP_URL_BASE.format(host=hostname)+'/transaction', data=json.dumps(payload))
+    except requests.exceptions.ConnectionError as e:
+        return _load_connection_error(hostname, e)
+
+    #extract the trans_id
+    data = _load_response(response)
+
+    if data['code'] == 200:
+
+        trans_id = data['content']['transId']
+
+        __salt__['grains.setval']('bigip_f5_trans', {label: trans_id})
+
+        return 'Transaction: {trans_id} - has successfully been stored in the grain: bigip_f5_trans:{label}'.format(trans_id=trans_id,
+                                                                                                                       label=label)
+    else:
+        return data
+
+
+def list_transaction(hostname, username, password, label):
+    '''
+    A function to connect to a bigip device and list an existing transaction.
+
+    hostname
+        The host/address of the bigip device
+    username
+        The iControl REST username
+    password
+        The iControl REST password
+    label
+        the label of this transaction stored within the grain:
+        ``bigip_f5_trans:<label>``
+
+    CLI Example::
+
+        salt '*' bigip.list_transaction bigip admin admin my_transaction
+
+    '''
+
+    #build the session
+    bigip_session = _build_session(username, password)
+
+    #pull the trans id from the grain
+    trans_id = __salt__['grains.get']('bigip_f5_trans:{label}'.format(label=label))
+
+    if trans_id:
+
+        #post to REST to get trans id
+        try:
+            response = bigip_session.get(BIG_IP_URL_BASE.format(host=hostname)+'/transaction/{trans_id}/commands'.format(trans_id=trans_id))
+            return _load_response(response)
+        except requests.exceptions.ConnectionError as e:
+            return _load_connection_error(hostname, e)
+    else:
+        return 'Error: the label for this transaction was not defined as a grain.  Begin a new transaction using the' \
+               ' bigip.start_transaction function'
+
+
+def commit_transaction(hostname, username, password, label):
+    '''
+    A function to connect to a bigip device and commit an existing transaction.
+
+    hostname
+        The host/address of the bigip device
+    username
+        The iControl REST username
+    password
+        The iControl REST password
+    label
+        the label of this transaction stored within the grain:
+        ``bigip_f5_trans:<label>``
+
+    CLI Example::
+
+        salt '*' bigip.commit_transaction bigip admin admin my_transaction
+    '''
+
+    #build the session
+    bigip_session = _build_session(username, password)
+
+    #pull the trans id from the grain
+    trans_id = __salt__['grains.get']('bigip_f5_trans:{label}'.format(label=label))
+
+    if trans_id:
+
+        payload = {}
+        payload['state'] = 'VALIDATING'
+
+        #patch to REST to get trans id
+        try:
+            response = bigip_session.patch(BIG_IP_URL_BASE.format(host=hostname)+'/transaction/{trans_id}'.format(trans_id=trans_id), data=json.dumps(payload))
+            return _load_response(response)
+        except requests.exceptions.ConnectionError as e:
+            return _load_connection_error(hostname, e)
+    else:
+        return 'Error: the label for this transaction was not defined as a grain.  Begin a new transaction using the' \
+               ' bigip.start_transaction function'
+
+
+def delete_transaction(hostname, username, password, label):
+    '''
+    A function to connect to a bigip device and delete an existing transaction.
+
+    hostname
+        The host/address of the bigip device
+    username
+        The iControl REST username
+    password
+        The iControl REST password
+    label
+        The label of this transaction stored within the grain:
+        ``bigip_f5_trans:<label>``
+
+    CLI Example::
+
+        salt '*' bigip.delete_transaction bigip admin admin my_transaction
+    '''
+
+    #build the session
+    bigip_session = _build_session(username, password)
+
+    #pull the trans id from the grain
+    trans_id = __salt__['grains.get']('bigip_f5_trans:{label}'.format(label=label))
+
+    if trans_id:
+
+        #patch to REST to get trans id
+        try:
+            response = bigip_session.delete(BIG_IP_URL_BASE.format(host=hostname)+'/transaction/{trans_id}'.format(trans_id=trans_id))
+            return _load_response(response)
+        except requests.exceptions.ConnectionError as e:
+            return _load_connection_error(hostname, e)
+    else:
+        return 'Error: the label for this transaction was not defined as a grain.  Begin a new transaction using the' \
+               ' bigip.start_transaction function'
+
+
+def list_node(hostname, username, password, name=None, trans_label=None):
     '''
     A function to connect to a bigip device and list all nodes or a specific node.
 
-    Parameters:
-        name: The name of the node to list. If no name is specified than all
-        nodes will be listed.
 
-    CLI Example:
+    hostname
+        The host/address of the bigip device
+    username
+        The iControl REST username
+    password
+        The iControl REST password
+    name
+        The name of the node to list. If no name is specified than all nodes
+        will be listed.
+    trans_label
+        The label of the transaction stored within the grain:
+        ``bigip_f5_trans:<label>``
+
+    CLI Example::
 
         salt '*' bigip.list_node bigip admin admin my-node
     '''
 
     #build sessions
-    bigip_session = _build_session(username, password)
+    bigip_session = _build_session(username, password, trans_label)
 
     #get to REST
     try:
@@ -213,21 +424,28 @@ def list_node(hostname, username, password, name=None):
         else:
             response = bigip_session.get(BIG_IP_URL_BASE.format(host=hostname)+'/ltm/node')
     except requests.exceptions.ConnectionError as e:
-        return 'Error: Unable to connect to the bigip device: {host}\n{error}'.format(host=hostname, error=e)
+        return _load_connection_error(hostname, e)
 
     return _load_response(response)
 
 
-def create_node(hostname, username, password, name, address):
+def create_node(hostname, username, password, name, address, trans_label=None):
     '''
     A function to connect to a bigip device and create a node.
 
-    Parameters:
-        hostname:   The host/address of the bigip device
-        username:   The iControl REST username
-        password:   The iControl REST password
-        name:       The name of the node
-        address:    The address of the node
+    hostname
+        The host/address of the bigip device
+    username
+        The iControl REST username
+    password
+        The iControl REST password
+    name
+        The name of the node
+    address
+        The address of the node
+    trans_label
+        The label of the transaction stored within the grain:
+        ``bigip_f5_trans:<label>``
 
     CLI Example::
 
@@ -235,7 +453,7 @@ def create_node(hostname, username, password, name, address):
     '''
 
     #build session
-    bigip_session = _build_session(username, password)
+    bigip_session = _build_session(username, password, trans_label)
 
     #construct the payload
     payload = {}
@@ -246,7 +464,7 @@ def create_node(hostname, username, password, name, address):
     try:
         response = bigip_session.post(BIG_IP_URL_BASE.format(host=hostname)+'/ltm/node', data=json.dumps(payload))
     except requests.exceptions.ConnectionError as e:
-        return 'Error: Unable to connect to the bigip device: {host}\n{error}'.format(host=hostname, error=e)
+        return _load_connection_error(hostname, e)
 
     return _load_response(response)
 
@@ -260,28 +478,42 @@ def modify_node(hostname, username, password, name,
                 rate_limit=None,
                 ratio=None,
                 session=None,
-                state=None):
+                state=None,
+                trans_label=None):
     '''
     A function to connect to a bigip device and modify an existing node.
 
-    Parameters:
-        hostname:             The host/address of the bigip device
-        username:             The iControl REST username
-        password:             The iControl REST password
-        name:                 The name of the node to modify
+    hostname
+        The host/address of the bigip device
+    username
+        The iControl REST username
+    password
+        The iControl REST password
+    name
+        The name of the node to modify
+    connection_limit
+        [integer]
+    description
+        [string]
+    dynamic_ratio
+        [integer]
+    logging
+        [enabled | disabled]
+    monitor
+        [[name] | none | default]
+    rate_limit
+        [integer]
+    ratio
+        [integer]
+    session
+        [user-enabled | user-disabled]
+    state
+        [user-down | user-up ]
+    trans_label
+        The label of the transaction stored within the grain:
+        ``bigip_f5_trans:<label>``
 
-
-        connection_limit:     [integer]
-        description:          [string]
-        dynamic_ratio:        [integer]
-        logging:              [enabled | disabled]
-        monitor:              [[name] | none | default]
-        rate_limit:           [integer]
-        ratio:                [integer]
-        session:              [user-enabled | user-disabled]
-        state:                [user-down | user-up ]
-
-    CLI Example:
+    CLI Example::
 
         salt '*' bigip.modify_node bigip admin admin 10.1.1.2 ratio=2 logging=enabled
     '''
@@ -299,7 +531,7 @@ def modify_node(hostname, username, password, name,
     }
 
     #build session
-    bigip_session = _build_session(username, password)
+    bigip_session = _build_session(username, password, trans_label)
 
     #build payload
     payload = _loop_payload(params)
@@ -309,34 +541,40 @@ def modify_node(hostname, username, password, name,
     try:
         response = bigip_session.put(BIG_IP_URL_BASE.format(host=hostname)+'/ltm/node/{name}'.format(name=name), data=json.dumps(payload))
     except requests.exceptions.ConnectionError as e:
-        return 'Error: Unable to connect to the bigip device: {hostname}\n{error}'.format(hostname=hostname, error=e)
+        return _load_connection_error(hostname, e)
 
     return _load_response(response)
 
 
-def delete_node(hostname, username, password, name):
+def delete_node(hostname, username, password, name, trans_label=None):
     '''
     A function to connect to a bigip device and delete a specific node.
 
-    Parameters:
-        hostname:                   The host/address of the bigip device
-        username:                   The iControl REST username
-        password:                   The iControl REST password
-        name: The name of the node which will be deleted.
+    hostname
+        The host/address of the bigip device
+    username
+        The iControl REST username
+    password
+        The iControl REST password
+    name
+        The name of the node which will be deleted.
+    trans_label
+        The label of the transaction stored within the grain:
+        ``bigip_f5_trans:<label>``
 
-    CLI Example:
+    CLI Example::
 
         salt '*' bigip.delete_node bigip admin admin my-node
     '''
 
     #build session
-    bigip_session = _build_session(username, password)
+    bigip_session = _build_session(username, password, trans_label)
 
     #delete to REST
     try:
         response = bigip_session.delete(BIG_IP_URL_BASE.format(host=hostname)+'/ltm/node/{name}'.format(name=name))
     except requests.exceptions.ConnectionError as e:
-        return 'Error: Unable to connect to the bigip device: {hostname}\n{error}'.format(hostname=hostname, error=e)
+        return _load_connection_error(hostname, e)
 
     if _load_response(response) == '':
         return True
@@ -348,14 +586,17 @@ def list_pool(hostname, username, password, name=None):
     '''
     A function to connect to a bigip device and list all pools or a specific pool.
 
-    Parameters:
-        hostname:                   The host/address of the bigip device
-        username:                   The iControl REST username
-        password:                   The iControl REST password
-        name:                       The name of the pool to list. If no name is specified then all
-                                    pools will be listed.
+    hostname
+        The host/address of the bigip device
+    username
+        The iControl REST username
+    password
+        The iControl REST password
+    name
+        The name of the pool to list. If no name is specified then all pools
+        will be listed.
 
-    CLI Example:
+    CLI Example::
 
         salt '*' bigip.list_pool bigip admin admin my-pool
     '''
@@ -370,7 +611,7 @@ def list_pool(hostname, username, password, name=None):
         else:
             response = bigip_session.get(BIG_IP_URL_BASE.format(host=hostname)+'/ltm/pool')
     except requests.exceptions.ConnectionError as e:
-        return 'Error: Unable to connect to the bigip device: {hostname}\n{error}'.format(hostname=hostname, error=e)
+        return _load_connection_error(hostname, e)
 
     return _load_response(response)
 
@@ -401,49 +642,74 @@ def create_pool(hostname, username, password, name, members=None,
     '''
     A function to connect to a bigip device and create a pool.
 
-    Parameters:
-        hostname:                   The host/address of the bigip device
-        username:                   The iControl REST username
-        password:                   The iControl REST password
-        name:                       The name of the pool to create.
-        members:                    List of comma delimited pool members to add to the pool.
-                                    i.e. 10.1.1.1:80,10.1.1.2:80,10.1.1.3:80
+    hostname
+        The host/address of the bigip device
+    username
+        The iControl REST username
+    password
+        The iControl REST password
+    name
+        The name of the pool to create.
+    members
+        List of comma delimited pool members to add to the pool.
+        i.e. 10.1.1.1:80,10.1.1.2:80,10.1.1.3:80
+    allow_nat
+        [yes | no]
+    allow_snat
+        [yes | no]
+    description
+        [string]
+    gateway_failsafe_device
+        [string]
+    ignore_persisted_weight
+        [enabled | disabled]
+    ip_tos_to_client
+        [pass-through | [integer]]
+    ip_tos_to_server
+        [pass-through | [integer]]
+    link_qos_to_client
+        [pass-through | [integer]]
+    link_qos_to_server
+        [pass-through | [integer]]
+    load_balancing_mode
+        [dynamic-ratio-member | dynamic-ratio-node |
+        fastest-app-response | fastest-node |
+        least-connections-members |
+        least-connections-node |
+        least-sessions |
+        observed-member | observed-node |
+        predictive-member | predictive-node |
+        ratio-least-connections-member |
+        ratio-least-connections-node |
+        ratio-member | ratio-node | ratio-session |
+        round-robin | weighted-least-connections-member |
+        weighted-least-connections-node]
+    min_active_members
+        [integer]
+    min_up_members
+        [integer]
+    min_up_members_action
+        [failover | reboot | restart-all]
+    min_up_members_checking
+        [enabled | disabled]
+    monitor
+        [name]
+    profiles
+        [none | profile_name]
+    queue_depth_limit
+        [integer]
+    queue_on_connection_limit
+        [enabled | disabled]
+    queue_time_limit
+        [integer]
+    reselect_tries
+        [integer]
+    service_down_action
+        [drop | none | reselect | reset]
+    slow_ramp_time
+        [integer]
 
-        allow_nat:                  [yes | no]
-        allow_snat:                 [yes | no]
-        description:                [string]
-        gateway_failsafe_device:    [string]
-        ignore_persisted_weight:    [enabled | disabled]
-        ip_tos_to_client:           [pass-through | [integer]]
-        ip_tos_to_server:           [pass-through | [integer]]
-        link_qos_to_client:         [pass-through | [integer]]
-        link_qos_to_server:         [pass-through | [integer]]
-        load_balancing_mode:        [dynamic-ratio-member | dynamic-ratio-node |
-                                    fastest-app-response | fastest-node |
-                                    least-connections-members |
-                                    least-connections-node |
-                                    least-sessions |
-                                    observed-member | observed-node |
-                                    predictive-member | predictive-node |
-                                    ratio-least-connections-member |
-                                    ratio-least-connections-node |
-                                    ratio-member | ratio-node | ratio-session |
-                                    round-robin | weighted-least-connections-member |
-                                    weighted-least-connections-node]
-        min_active_members:         [integer]
-        min_up_members:             [integer]
-        min_up_members_action:      [failover | reboot | restart-all]
-        min_up_members_checking:    [enabled | disabled]
-        monitor:                    [name]
-        profiles:                   [none | profile_name]
-        queue_depth_limit:          [integer]
-        queue_on_connection_limit:  [enabled | disabled]
-        queue_time_limit:           [integer]
-        reselect_tries:             [integer]
-        service_down_action:        [drop | none | reselect | reset]
-        slow_ramp_time:             [integer]
-
-    CLI Example:
+    CLI Example::
 
         salt '*' bigip.create_pool bigip admin admin my-pool 10.1.1.1:80,10.1.1.2:80,10.1.1.3:80 monitor=http
     '''
@@ -496,7 +762,7 @@ def create_pool(hostname, username, password, name, members=None,
     try:
         response = bigip_session.post(BIG_IP_URL_BASE.format(host=hostname)+'/ltm/pool', data=json.dumps(payload))
     except requests.exceptions.ConnectionError as e:
-        return 'Error: Unable to connect to the bigip device: {hostname}\n{error}'.format(hostname=hostname, error=e)
+        return _load_connection_error(hostname, e)
 
     return _load_response(response)
 
@@ -527,47 +793,71 @@ def modify_pool(hostname, username, password, name,
     '''
     A function to connect to a bigip device and modify an existing pool.
 
-    Parameters:
-        hostname:                   The host/address of the bigip device
-        username:                   The iControl REST username
-        password:                   The iControl REST password
-        name:                       The name of the pool to modify.
+    hostname
+        The host/address of the bigip device
+    username
+        The iControl REST username
+    password
+        The iControl REST password
+    name
+        The name of the pool to modify.
+    allow_nat
+        [yes | no]
+    allow_snat
+        [yes | no]
+    description
+        [string]
+    gateway_failsafe_device
+        [string]
+    ignore_persisted_weight
+        [yes | no]
+    ip_tos_to_client
+        [pass-through | [integer]]
+    ip_tos_to_server
+        [pass-through | [integer]]
+    link_qos_to_client
+        [pass-through | [integer]]
+    link_qos_to_server
+        [pass-through | [integer]]
+    load_balancing_mode
+        [dynamic-ratio-member | dynamic-ratio-node |
+        fastest-app-response | fastest-node |
+        least-connections-members |
+        least-connections-node |
+        least-sessions |
+        observed-member | observed-node |
+        predictive-member | predictive-node |
+        ratio-least-connections-member |
+        ratio-least-connections-node |
+        ratio-member | ratio-node | ratio-session |
+        round-robin | weighted-least-connections-member |
+        weighted-least-connections-node]
+    min_active_members
+        [integer]
+    min_up_members
+        [integer]
+    min_up_members_action
+        [failover | reboot | restart-all]
+    min_up_members_checking
+        [enabled | disabled]
+    monitor
+        [name]
+    profiles
+        [none | profile_name]
+    queue_on_connection_limit
+        [enabled | disabled]
+    queue_depth_limit
+        [integer]
+    queue_time_limit
+        [integer]
+    reselect_tries
+        [integer]
+    service_down_action
+        [drop | none | reselect | reset]
+    slow_ramp_time
+        [integer]
 
-        allow_nat:                  [yes | no]
-        allow_snat:                 [yes | no]
-        description:                [string]
-        gateway_failsafe_device:    [string]
-        ignore_persisted_weight:    [yes | no]
-        ip_tos_to_client:           [pass-through | [integer]]
-        ip_tos_to_server:           [pass-through | [integer]]
-        link_qos_to_client:         [pass-through | [integer]]
-        link_qos_to_server:         [pass-through | [integer]]
-        load_balancing_mode:        [dynamic-ratio-member | dynamic-ratio-node |
-                                    fastest-app-response | fastest-node |
-                                    least-connections-members |
-                                    least-connections-node |
-                                    least-sessions |
-                                    observed-member | observed-node |
-                                    predictive-member | predictive-node |
-                                    ratio-least-connections-member |
-                                    ratio-least-connections-node |
-                                    ratio-member | ratio-node | ratio-session |
-                                    round-robin | weighted-least-connections-member |
-                                    weighted-least-connections-node]
-        min_active_members:         [integer]
-        min_up_members:             [integer]
-        min_up_members_action:      [failover | reboot | restart-all]
-        min_up_members_checking:    [enabled | disabled]
-        monitor:                    [name]
-        profiles:                   [none | profile_name]
-        queue_on_connection_limit:  [enabled | disabled]
-        queue_depth_limit:          [integer]
-        queue_time_limit:           [integer]
-        reselect_tries:             [integer]
-        service_down_action:        [drop | none | reselect | reset]
-        slow_ramp_time:             [integer]
-
-    CLI Example:
+    CLI Example::
 
         salt '*' bigip.modify_pool bigip admin admin my-pool 10.1.1.1:80,10.1.1.2:80,10.1.1.3:80 min_active_members=1
     '''
@@ -616,7 +906,7 @@ def modify_pool(hostname, username, password, name,
     try:
         response = bigip_session.put(BIG_IP_URL_BASE.format(host=hostname)+'/ltm/pool/{name}'.format(name=name), data=json.dumps(payload))
     except requests.exceptions.ConnectionError as e:
-        return 'Error: Unable to connect to the bigip device: {hostname}\n{error}'.format(hostname=hostname, error=e)
+        return _load_connection_error(hostname, e)
 
     return _load_response(response)
 
@@ -625,13 +915,16 @@ def delete_pool(hostname, username, password, name):
     '''
     A function to connect to a bigip device and delete a specific pool.
 
-    Parameters:
-        hostname:                   The host/address of the bigip device
-        username:                   The iControl REST username
-        password:                   The iControl REST password
-        name:                       The name of the pool which will be deleted
+    hostname
+        The host/address of the bigip device
+    username
+        The iControl REST username
+    password
+        The iControl REST password
+    name
+        The name of the pool which will be deleted
 
-    CLI Example:
+    CLI Example::
 
         salt '*' bigip.delete_node bigip admin admin my-pool
     '''
@@ -643,7 +936,7 @@ def delete_pool(hostname, username, password, name):
     try:
         response = bigip_session.delete(BIG_IP_URL_BASE.format(host=hostname)+'/ltm/pool/{name}'.format(name=name))
     except requests.exceptions.ConnectionError as e:
-        return 'Error: Unable to connect to the bigip device: {hostname}\n{error}'.format(hostname=hostname, error=e)
+        return _load_connection_error(hostname, e)
 
     if _load_response(response) == '':
         return True
@@ -655,14 +948,20 @@ def replace_pool_members(hostname, username, password, name, members):
     '''
     A function to connect to a bigip device and replace members of an existing pool with new members.
 
-    Parameters:
-        hostname:                   The host/address of the bigip device
-        username:                   The iControl REST username
-        password:                   The iControl REST password
-        name:                       The name of the pool to modify
-        members:                    List of comma delimited pool members to replace existing members with.
-                                    i.e. 10.1.1.1:80,10.1.1.2:80,10.1.1.3:80
-    CLI Example:
+    hostname
+        The host/address of the bigip device
+    username
+        The iControl REST username
+    password
+        The iControl REST password
+    name
+        The name of the pool to modify
+    members
+        List of comma delimited pool members to replace existing members with.
+        i.e. 10.1.1.1:80,10.1.1.2:80,10.1.1.3:80
+
+    CLI Example::
+
         salt '*' bigip.replace_pool_members bigip admin admin my-pool 10.2.2.1:80,10.2.2.2:80,10.2.2.3:80
     '''
 
@@ -670,10 +969,31 @@ def replace_pool_members(hostname, username, password, name, members):
     payload['name'] = name
     #specify members if provided
     if members is not None:
-        members = members.split(',')
+
+        if isinstance(members, str):
+            members = members.split(',')
+
         pool_members = []
         for member in members:
-            pool_members.append({'name': member, 'address': member.split(':')[0]})
+
+            #check to see if already a dictionary ( for states)
+            if isinstance(member, dict):
+
+                #check for state alternative name 'member_state', replace with state
+                if 'member_state' in member.keys():
+                    member['state'] = member.pop('member_state')
+
+                #replace underscore with dash
+                for key in member.keys():
+                    new_key = key.replace('_', '-')
+                    member[new_key] = member.pop(key)
+
+                pool_members.append(member)
+
+            #parse string passed via execution command (for executions)
+            else:
+                pool_members.append({'name': member, 'address': member.split(':')[0]})
+
         payload['members'] = pool_members
 
     #build session
@@ -683,7 +1003,7 @@ def replace_pool_members(hostname, username, password, name, members):
     try:
         response = bigip_session.put(BIG_IP_URL_BASE.format(host=hostname)+'/ltm/pool/{name}'.format(name=name), data=json.dumps(payload))
     except requests.exceptions.ConnectionError as e:
-        return 'Error: Unable to connect to the bigip device: {hostname}\n{error}'.format(hostname=hostname, error=e)
+        return _load_connection_error(hostname, e)
 
     return _load_response(response)
 
@@ -692,18 +1012,42 @@ def add_pool_member(hostname, username, password, name, member):
     '''
     A function to connect to a bigip device and add a new member to an existing pool.
 
-    Parameters:
-        hostname:                   The host/address of the bigip device
-        username:                   The iControl REST username
-        password:                   The iControl REST password
-        name:                       The name of the pool to modify
-        member:                     The name of the member to add
-                                    i.e. 10.1.1.2:80
+    hostname
+        The host/address of the bigip device
+    username
+        The iControl REST username
+    password
+        The iControl REST password
+    name
+        The name of the pool to modify
+    member
+        The name of the member to add
+        i.e. 10.1.1.2:80
+
     CLI Example:
+
+    .. code-block:: bash
+
         salt '*' bigip.add_pool_members bigip admin admin my-pool 10.2.2.1:80
     '''
 
-    payload = {'name': member, 'address': member.split(':')[0]}
+    # for states
+    if isinstance(member, dict):
+
+        #check for state alternative name 'member_state', replace with state
+        if 'member_state' in member.keys():
+            member['state'] = member.pop('member_state')
+
+        #replace underscore with dash
+        for key in member.keys():
+            new_key = key.replace('_', '-')
+            member[new_key] = member.pop(key)
+
+        payload = member
+    # for execution
+    else:
+
+        payload = {'name': member, 'address': member.split(':')[0]}
 
     #build session
     bigip_session = _build_session(username, password)
@@ -712,49 +1056,64 @@ def add_pool_member(hostname, username, password, name, member):
     try:
         response = bigip_session.post(BIG_IP_URL_BASE.format(host=hostname)+'/ltm/pool/{name}/members'.format(name=name), data=json.dumps(payload))
     except requests.exceptions.ConnectionError as e:
-        return 'Error: Unable to connect to the bigip device: {hostname}\n{error}'.format(hostname=hostname, error=e)
+        return _load_connection_error(hostname, e)
 
     return _load_response(response)
 
 
 def modify_pool_member(hostname, username, password, name, member,
-                        connection_limit=None,
-                        description=None,
-                        dynamic_ratio=None,
-                        inherit_profile=None,
-                        logging=None,
-                        monitor=None,
-                        priority_group=None,
-                        profiles=None,
-                        rate_limit=None,
-                        ratio=None,
-                        session=None,
-                        state=None):
+                       connection_limit=None,
+                       description=None,
+                       dynamic_ratio=None,
+                       inherit_profile=None,
+                       logging=None,
+                       monitor=None,
+                       priority_group=None,
+                       profiles=None,
+                       rate_limit=None,
+                       ratio=None,
+                       session=None,
+                       state=None):
     '''
     A function to connect to a bigip device and modify an existing member of a pool.
 
-    Parameters:
-        hostname:                   The host/address of the bigip device
-        username:                   The iControl REST username
-        password:                   The iControl REST password
-        name:                       The name of the pool to modify
-        member:                     The name of the member to modify
-                                    i.e. 10.1.1.2:80
+    hostname
+        The host/address of the bigip device
+    username
+        The iControl REST username
+    password
+        The iControl REST password
+    name
+        The name of the pool to modify
+    member
+        The name of the member to modify i.e. 10.1.1.2:80
+    connection_limit
+        [integer]
+    description
+        [string]
+    dynamic_ratio
+        [integer]
+    inherit_profile
+        [enabled | disabled]
+    logging
+        [enabled | disabled]
+    monitor
+        [name]
+    priority_group
+        [integer]
+    profiles
+        [none | profile_name]
+    rate_limit
+        [integer]
+    ratio
+        [integer]
+    session
+        [user-enabled | user-disabled]
+    state
+        [ user-up | user-down ]
 
-        connection_limit:           [integer]
-        description:                [string]
-        dynamic_ratio:              [integer]
-        inherit_profile:            [enabled | disabled]
-        logging:                    [enabled | disabled]
-        monitor:                    [name]
-        priority_group:             [integer]
-        profiles:                   [none | profile_name]
-        rate_limit:                 [integer]
-        ratio:                      [integer]
-        session:                    [user-enabled | user-disabled]
-        state:                      [ user-up | user-down ]
+    CLI Example::
 
-    CLI Example:
         salt '*' bigip.modify_pool_member bigip admin admin my-pool 10.2.2.1:80 state=use-down session=user-disabled
     '''
 
@@ -783,7 +1142,7 @@ def modify_pool_member(hostname, username, password, name, member,
     try:
         response = bigip_session.put(BIG_IP_URL_BASE.format(host=hostname)+'/ltm/pool/{name}/members/{member}'.format(name=name, member=member), data=json.dumps(payload))
     except requests.exceptions.ConnectionError as e:
-        return 'Error: Unable to connect to the bigip device: {hostname}\n{error}'.format(hostname=hostname, error=e)
+        return _load_connection_error(hostname, e)
 
     return _load_response(response)
 
@@ -792,14 +1151,18 @@ def delete_pool_member(hostname, username, password, name, member):
     '''
     A function to connect to a bigip device and delete a specific pool.
 
-    Parameters:
-        hostname:                   The host/address of the bigip device
-        username:                   The iControl REST username
-        password:                   The iControl REST password
-        name:                       The name of the pool to modify
-        member:                     The name of the pool member to delete
+    hostname
+        The host/address of the bigip device
+    username
+        The iControl REST username
+    password
+        The iControl REST password
+    name
+        The name of the pool to modify
+    member
+        The name of the pool member to delete
 
-    CLI Example:
+    CLI Example::
 
         salt '*' bigip.delete_node bigip admin admin my-pool 10.2.2.2:80
     '''
@@ -811,7 +1174,7 @@ def delete_pool_member(hostname, username, password, name, member):
     try:
         response = bigip_session.delete(BIG_IP_URL_BASE.format(host=hostname)+'/ltm/pool/{name}/members/{member}'.format(name=name, member=member))
     except requests.exceptions.ConnectionError as e:
-        return 'Error: Unable to connect to the bigip device: {hostname}\n{error}'.format(hostname=hostname, error=e)
+        return _load_connection_error(hostname, e)
 
     if _load_response(response) == '':
         return True
@@ -821,16 +1184,19 @@ def delete_pool_member(hostname, username, password, name, member):
 
 def list_virtual(hostname, username, password, name=None):
     '''
-    A function to connect to a bigip device and list all pools or a specific pool.
+    A function to connect to a bigip device and list all virtuals or a specific virtual.
 
-    Parameters:
-        hostname:                   The host/address of the bigip device
-        username:                   The iControl REST username
-        password:                   The iControl REST password
-        name:                       The name of the virtual to list. If no name is specified than all
-                                    virtuals will be listed.
+    hostname
+        The host/address of the bigip device
+    username
+        The iControl REST username
+    password
+        The iControl REST password
+    name
+        The name of the virtual to list. If no name is specified than all
+        virtuals will be listed.
 
-    CLI Example:
+    CLI Example::
 
         salt '*' bigip.list_virtual bigip admin admin my-virtual
     '''
@@ -845,7 +1211,7 @@ def list_virtual(hostname, username, password, name=None):
         else:
             response = bigip_session.get(BIG_IP_URL_BASE.format(host=hostname)+'/ltm/virtual')
     except requests.exceptions.ConnectionError as e:
-        return 'Error: Unable to connect to the bigip device: {hostname}\n{error}'.format(hostname=hostname, error=e)
+        return _load_connection_error(hostname, e)
 
     return _load_response(response)
 
@@ -853,7 +1219,6 @@ def list_virtual(hostname, username, password, name=None):
 def create_virtual(hostname, username, password, name, destination,
                    pool=None,
                    address_status=None,
-                   app_service=None,
                    auto_lasthop=None,
                    bwc_policy=None,
                    cmp_enabled=None,
@@ -893,75 +1258,117 @@ def create_virtual(hostname, username, password, name, destination,
     r'''
     A function to connect to a bigip device and create a virtual server.
 
-    Parameters:
-        hostname:                   The host/address of the bigip device
-        username:                   The iControl REST username
-        password:                   The iControl REST password
-        name:                       The name of the virtual to create
-        destination:                [ [virtual_address_name:port] | [ipv4:port] | [ipv6.port] ]
+    hostname
+        The host/address of the bigip device
+    username
+        The iControl REST username
+    password
+        The iControl REST password
+    name
+        The name of the virtual to create
+    destination
+        [ [virtual_address_name:port] | [ipv4:port] | [ipv6.port] ]
+    pool
+        [ [pool_name] | none]
+    address_status
+        [yes | no]
+    auto_lasthop
+        [default | enabled | disabled ]
+    bwc_policy
+        [none] | string]
+    cmp_enabled
+        [yes | no]
+    dhcp_relay
+        [yes | no]
+    connection_limit
+        [integer]
+    description
+        [string]
+    state
+        [disabled | enabled]
+    fallback_persistence
+        [none | [profile name] ]
+    flow_eviction_policy
+        [none | [eviction policy name] ]
+    gtm_score
+        [integer]
+    ip_forward
+        [yes | no]
+    ip_protocol
+        [any | protocol]
+    internal
+        [yes | no]
+    twelve_forward
+        (12-forward)
+        [yes | no]
+    last_hop-pool
+        [ [pool_name] | none]
+    mask
+        { [ipv4] | [ipv6] }
+    mirror
+        { [disabled | enabled | none] }
+    nat64
+        [enabled | disabled]
+    persist
+        [none | profile1,profile2,profile3 ... ]
+    profiles
+        [none | default | profile1,profile2,profile3 ... ]
+    policies
+        [none | default | policy1,policy2,policy3 ... ]
+    rate_class
+        [name]
+    rate_limit
+        [integer]
+    rate_limit_mode
+        [destination | object | object-destination |
+        object-source | object-source-destination |
+        source | source-destination]
+    rate_limit_dst
+        [integer]
+    rate_limitçsrc
+        [integer]
+    rules
+        [none | [rule_one,rule_two ...] ]
+    related_rules
+        [none | [rule_one,rule_two ...] ]
+    reject
+        [yes | no]
+    source
+        { [ipv4[/prefixlen]] | [ipv6[/prefixlen]] }
+    source_address_translation
+        [none | snat:pool_name | lsn | automap ]
+    source_port
+        [change | preserve | preserve-strict]
+    state
+        [enabled | disabled]
+    traffic_classes
+        [none | default | class_one,class_two ... ]
+    translate_address
+        [enabled | disabled]
+    translate_port
+        [enabled | disabled]
+    vlans
+        [none | default | [enabled|disabled]:vlan1,vlan2,vlan3 ... ]
 
-        pool:                       [ [pool_name] | none]
-        address_status:             [yes | no]
-        auto_lasthop:               [default | enabled | disabled ]
-        bwc_policy:                 [none] | string]
-        cmp_enabled:                [yes | no]
-        dhcp_relay:                 [yes | no}
-        connection_limit:           [integer]
-        description:                [string]
-        state:                      [disabled | enabled]
-        fallback_persistence:       [none | [profile name] ]
-        flow_eviction_policy:       [none | [eviction policy name] ]
-        gtm_score:                  [integer]
-        ip_forward:                 [yes | no]
-        ip_protocol:                [any | protocol]
-        internal:                   [yes | no]
-        twelve_forward(12-forward): [yes | no]
-        last_hop-pool:              [ [pool_name] | none]
-        mask:                       { [ipv4] | [ipv6] }
-        mirror:                     { [disabled | enabled | none] }
-        nat64:                      [enabled | disabled]
-        persist:                    [none | profile1,profile2,profile3 ... ]
-        profiles:                   [none | default | profile1,profile2,profile3 ... ]
-        policies:                   [none | default | policy1,policy2,policy3 ... ]
-        rate_class:                 [name]
-        rate_limit:                 [integer]
-        rate_limit-mode:            [destination | object | object-destination |
-                                    object-source | object-source-destination |
-                                    source | source-destination]
-        rate_limit-dst:             [integer]
-        rate_limit-src:             [integer]
-        rules:                      [none | [rule_one,rule_two ...] ]
-        related_rules:              [none | [rule_one,rule_two ...] ]
-        reject:                     [yes | no]
-        source:                     { [ipv4[/prefixlen]] | [ipv6[/prefixlen]] }
-        source_address_translation: [none | snat:pool_name | lsn | automap ]
-        source-port                 [change | preserve | preserve-strict]
-        state                       [enabled | disabled]
-        traffic_classes:            [none | default | class_one,class_two ... ]
-        translate_address:          [enabled | disabled]
-        translate_port:             [enabled | disabled]
-        vlans:                      [none | default | [enabled|disabled]:vlan1,vlan2,vlan3 ... ]
+    CLI Examples::
 
-    CLI Examples:
+        salt '*' bigip.create_virtual bigip admin admin my-virtual-3 26.2.2.5:80 \
+            pool=my-http-pool-http profiles=http,tcp
 
-        salt '*' bigip.create_virtual bigip admin admin my-virtual-3 26.2.2.5:80 \ \n
-        pool=my-http-pool-http profiles=http,tcp \n
-
-        salt '*' bigip.create_virtual bigip admin admin my-virtual-3 43.2.2.5:80 \ \n
-        pool=test-http-pool-http profiles=http,websecurity persist=cookie,hash \ \n
-        policies=asm_auto_l7_policy__http-virtual \ \n
-        rules=_sys_APM_ExchangeSupport_helper,_sys_https_redirect \ \n
-        related_rules=_sys_APM_activesync,_sys_APM_ExchangeSupport_helper \ \n
-        source_address_translation=snat:my-snat-pool \ \n
-        translate_address=enabled translate_port=enabled \ \n
-        traffic_classes=my-class,other-class \ \n
-        vlans=enabled:external,internal
+        salt '*' bigip.create_virtual bigip admin admin my-virtual-3 43.2.2.5:80 \
+            pool=test-http-pool-http profiles=http,websecurity persist=cookie,hash \
+            policies=asm_auto_l7_policy__http-virtual \
+            rules=_sys_APM_ExchangeSupport_helper,_sys_https_redirect \
+            related_rules=_sys_APM_activesync,_sys_APM_ExchangeSupport_helper \
+            source_address_translation=snat:my-snat-pool \
+            translate_address=enabled translate_port=enabled \
+            traffic_classes=my-class,other-class \
+            vlans=enabled:external,internal
 
     '''
 
     params = {
         'pool': pool,
-        'app-service': app_service,
         'auto-lasthop': auto_lasthop,
         'bwc-policy': bwc_policy,
         'connection-limit': connection_limit,
@@ -1066,7 +1473,7 @@ def create_virtual(hostname, username, password, name, destination,
             payload['vlans'] = 'none'
         elif vlans == 'default':
             payload['vlans'] = 'default'
-        elif vlans.startswith('enabled') or vlans.startswith('disabled'):
+        elif isinstance(vlans, str) and (vlans.startswith('enabled') or vlans.startswith('disabled')):
             try:
                 vlans_setting = vlans.split(':')[0]
                 payload['vlans'] = vlans.split(':')[1].split(',')
@@ -1076,6 +1483,8 @@ def create_virtual(hostname, username, password, name, destination,
                     payload['vlans-enabled'] = True
             except Exception:
                 return 'Error: Unable to Parse vlans option: \n\tvlans={vlans}'.format(vlans=vlans)
+        else:
+            return 'Error: vlans must be a dictionary or string.'
 
     #determine state
     if state is not None:
@@ -1088,7 +1497,7 @@ def create_virtual(hostname, username, password, name, destination,
     try:
         response = bigip_session.post(BIG_IP_URL_BASE.format(host=hostname)+'/ltm/virtual', data=json.dumps(payload))
     except requests.exceptions.ConnectionError as e:
-        return 'Error: Unable to connect to the bigip device: {hostname}\n{error}'.format(hostname=hostname, error=e)
+        return _load_connection_error(hostname, e)
 
     return _load_response(response)
 
@@ -1097,7 +1506,6 @@ def modify_virtual(hostname, username, password, name,
                    destination=None,
                    pool=None,
                    address_status=None,
-                   app_service=None,
                    auto_lasthop=None,
                    bwc_policy=None,
                    cmp_enabled=None,
@@ -1137,56 +1545,99 @@ def modify_virtual(hostname, username, password, name,
     '''
     A function to connect to a bigip device and modify an existing virtual server.
 
-    Parameters:
-        hostname:                   The host/address of the bigip device
-        username:                   The iControl REST username
-        password:                   The iControl REST password
-        name:                       The name of the virtual to modify
+    hostname
+        The host/address of the bigip device
+    username
+        The iControl REST username
+    password
+        The iControl REST password
+    name
+        The name of the virtual to modify
+    destination
+        [ [virtual_address_name:port] | [ipv4:port] | [ipv6.port] ]
+    pool
+        [ [pool_name] | none]
+    address_status
+        [yes | no]
+    auto_lasthop
+        [default | enabled | disabled ]
+    bwc_policy
+        [none] | string]
+    cmp_enabled
+        [yes | no]
+    dhcp_relay
+        [yes | no}
+    connection_limit
+        [integer]
+    description
+        [string]
+    state
+        [disabled | enabled]
+    fallback_persistence
+        [none | [profile name] ]
+    flow_eviction_policy
+        [none | [eviction policy name] ]
+    gtm_score
+        [integer]
+    ip_forward
+        [yes | no]
+    ip_protocol
+        [any | protocol]
+    internal
+        [yes | no]
+    twelve_forward
+        (12-forward)
+        [yes | no]
+    last_hop-pool
+        [ [pool_name] | none]
+    mask
+        { [ipv4] | [ipv6] }
+    mirror
+        { [disabled | enabled | none] }
+    nat64
+        [enabled | disabled]
+    persist
+        [none | profile1,profile2,profile3 ... ]
+    profiles
+        [none | default | profile1,profile2,profile3 ... ]
+    policies
+        [none | default | policy1,policy2,policy3 ... ]
+    rate_class
+        [name]
+    rate_limit
+        [integer]
+    rate_limitr_mode
+        [destination | object | object-destination |
+        object-source | object-source-destination |
+        source | source-destination]
+    rate_limit_dst
+        [integer]
+    rate_limit_src
+        [integer]
+    rules
+        [none | [rule_one,rule_two ...] ]
+    related_rules
+        [none | [rule_one,rule_two ...] ]
+    reject
+        [yes | no]
+    source
+        { [ipv4[/prefixlen]] | [ipv6[/prefixlen]] }
+    source_address_translation
+        [none | snat:pool_name | lsn | automap ]
+    source_port
+        [change | preserve | preserve-strict]
+    state
+        [enabled | disable]
+    traffic_classes
+        [none | default | class_one,class_two ... ]
+    translate_address
+        [enabled | disabled]
+    translate_port
+        [enabled | disabled]
+    vlans
+        [none | default | [enabled|disabled]:vlan1,vlan2,vlan3 ... ]
 
-        destination:                [ [virtual_address_name:port] | [ipv4:port] | [ipv6.port] ]
-        pool:                       [ [pool_name] | none]
-        address_status:             [yes | no]
-        auto_lasthop:               [default | enabled | disabled ]
-        bwc_policy:                 [none] | string]
-        cmp_enabled:                [yes | no]
-        dhcp_relay:                 [yes | no}
-        connection_limit:           [integer]
-        description:                [string]
-        state:                      [disabled | enabled]
-        fallback_persistence:       [none | [profile name] ]
-        flow_eviction_policy:       [none | [eviction policy name] ]
-        gtm_score:                  [integer]
-        ip_forward:                 [yes | no]
-        ip_protocol:                [any | protocol]
-        internal:                   [yes | no]
-        twelve_forward(12-forward): [yes | no]
-        last_hop-pool:              [ [pool_name] | none]
-        mask:                       { [ipv4] | [ipv6] }
-        mirror:                     { [disabled | enabled | none] }
-        nat64:                      [enabled | disabled]
-        persist:                    [none | profile1,profile2,profile3 ... ]
-        profiles:                   [none | default | profile1,profile2,profile3 ... ]
-        policies:                   [none | default | policy1,policy2,policy3 ... ]
-        rate_class:                 [name]
-        rate_limit:                 [integer]
-        rate_limit-mode:            [destination | object | object-destination |
-                                    object-source | object-source-destination |
-                                    source | source-destination]
-        rate_limit-dst:             [integer]
-        rate_limit-src:             [integer]
-        rules:                      [none | [rule_one,rule_two ...] ]
-        related_rules:              [none | [rule_one,rule_two ...] ]
-        reject:                     [yes | no]
-        source:                     { [ipv4[/prefixlen]] | [ipv6[/prefixlen]] }
-        source_address_translation: [none | snat:pool_name | lsn | automap ]
-        source-port                 [change | preserve | preserve-strict]
-        state                       [enabled | disable]
-        traffic_classes:            [none | default | class_one,class_two ... ]
-        translate_address:          [enabled | disabled]
-        translate_port:             [enabled | disabled]
-        vlans:                      [none | default | [enabled|disabled]:vlan1,vlan2,vlan3 ... ]
-
-    CLI Example:
+    CLI Example::
 
         salt '*' bigip.modify_virtual bigip admin admin my-virtual source_address_translation=none
         salt '*' bigip.modify_virtual bigip admin admin my-virtual rules=my-rule,my-other-rule
@@ -1195,7 +1646,6 @@ def modify_virtual(hostname, username, password, name,
     params = {
         'destination': destination,
         'pool': pool,
-        'app-service': app_service,
         'auto-lasthop': auto_lasthop,
         'bwc-policy': bwc_policy,
         'connection-limit': connection_limit,
@@ -1316,7 +1766,7 @@ def modify_virtual(hostname, username, password, name,
     try:
         response = bigip_session.put(BIG_IP_URL_BASE.format(host=hostname)+'/ltm/virtual/{name}'.format(name=name), data=json.dumps(payload))
     except requests.exceptions.ConnectionError as e:
-        return 'Error: Unable to connect to the bigip device: {hostname}\n{error}'.format(hostname=hostname, error=e)
+        return _load_connection_error(hostname, e)
 
     return _load_response(response)
 
@@ -1325,13 +1775,16 @@ def delete_virtual(hostname, username, password, name):
     '''
     A function to connect to a bigip device and delete a specific virtual.
 
-    Parameters:
-        hostname:                   The host/address of the bigip device
-        username:                   The iControl REST username
-        password:                   The iControl REST password
-        name:                       The name of the virtual to delete
+    hostname
+        The host/address of the bigip device
+    username
+        The iControl REST username
+    password
+        The iControl REST password
+    name
+        The name of the virtual to delete
 
-    CLI Example:
+    CLI Example::
 
         salt '*' bigip.delete_virtual bigip admin admin my-virtual
     '''
@@ -1343,7 +1796,7 @@ def delete_virtual(hostname, username, password, name):
     try:
         response = bigip_session.delete(BIG_IP_URL_BASE.format(host=hostname)+'/ltm/virtual/{name}'.format(name=name))
     except requests.exceptions.ConnectionError as e:
-        return 'Error: Unable to connect to the bigip device: {hostname}\n{error}'.format(hostname=hostname, error=e)
+        return _load_connection_error(hostname, e)
 
     if _load_response(response) == '':
         return True
@@ -1356,14 +1809,18 @@ def list_monitor(hostname, username, password, monitor_type, name=None, ):
     A function to connect to a bigip device and list an existing monitor.  If no name is provided than all
     monitors of the specified type will be listed.
 
-    Parameters:
-        hostname:                   The host/address of the bigip device
-        username:                   The iControl REST username
-        password:                   The iControl REST password
-        monitor_type:               The type of monitor(s) to list
-        name:                       The name of the monitor to list
+    hostname
+        The host/address of the bigip device
+    username
+        The iControl REST username
+    password
+        The iControl REST password
+    monitor_type
+        The type of monitor(s) to list
+    name
+        The name of the monitor to list
 
-    CLI Example:
+    CLI Example::
 
         salt '*' bigip.list_monitor bigip admin admin http my-http-monitor
 
@@ -1379,7 +1836,7 @@ def list_monitor(hostname, username, password, monitor_type, name=None, ):
         else:
             response = bigip_session.get(BIG_IP_URL_BASE.format(host=hostname)+'/ltm/monitor/{type}'.format(type=monitor_type))
     except requests.exceptions.ConnectionError as e:
-        return 'Error: Unable to connect to the bigip device: {hostname}\n{error}'.format(hostname=hostname, error=e)
+        return _load_connection_error(hostname, e)
 
     return _load_response(response)
 
@@ -1388,23 +1845,23 @@ def create_monitor(hostname, username, password, monitor_type, name, **kwargs):
     '''
     A function to connect to a bigip device and create a monitor.
 
-    Parameters:
-        hostname:                   The host/address of the bigip device
-        username:                   The iControl REST username
-        password:                   The iControl REST password
-        monitor_type:               The type of monitor to create
-        name:                       The name of the monitor to create
+    hostname
+        The host/address of the bigip device
+    username
+        The iControl REST username
+    password
+        The iControl REST password
+    monitor_type
+        The type of monitor to create
+    name
+        The name of the monitor to create
+    kwargs
+        Consult F5 BIGIP user guide for specific options for each monitor type.
+        Typically, tmsh arg names are used.
 
+    CLI Example::
 
-        Keyword Args:               [ arg=val ] ...
-                                    Consult F5 BIGIP user guide for specific
-                                    options for each monitor type. Typically,
-                                    tmsh arg names are used.
-
-        CLI Example:
-
-            salt '*' bigip.create_monitor bigip admin admin http my-http-monitor  timeout=10 interval=5
-
+        salt '*' bigip.create_monitor bigip admin admin http my-http-monitor timeout=10 interval=5
     '''
 
     #build session
@@ -1416,7 +1873,7 @@ def create_monitor(hostname, username, password, monitor_type, name, **kwargs):
 
     #there's a ton of different monitors and a ton of options for each type of monitor.
     #this logic relies that the end user knows which options are meant for which monitor types
-    for key, value in kwargs.iteritems():
+    for key, value in six.iteritems(kwargs):
         if not key.startswith('__'):
             if key not in ['hostname', 'username', 'password', 'type']:
                 key = key.replace('_', '-')
@@ -1426,7 +1883,7 @@ def create_monitor(hostname, username, password, monitor_type, name, **kwargs):
     try:
         response = bigip_session.post(BIG_IP_URL_BASE.format(host=hostname)+'/ltm/monitor/{type}'.format(type=monitor_type), data=json.dumps(payload))
     except requests.exceptions.ConnectionError as e:
-        return 'Error: Unable to connect to the bigip device: {hostname}\n{error}'.format(hostname=hostname, error=e)
+        return _load_connection_error(hostname, e)
 
     return _load_response(response)
 
@@ -1435,20 +1892,21 @@ def modify_monitor(hostname, username, password, monitor_type, name, **kwargs):
     '''
     A function to connect to a bigip device and modify an existing monitor.
 
-    Parameters:
-        hostname:                   The host/address of the bigip device
-        username:                   The iControl REST username
-        password:                   The iControl REST password
-        monitor_type:               The type of monitor to modify
-        name:                       The name of the monitor to modify
+    hostname
+        The host/address of the bigip device
+    username
+        The iControl REST username
+    password
+        The iControl REST password
+    monitor_type
+        The type of monitor to modify
+    name
+        The name of the monitor to modify
+    kwargs
+        Consult F5 BIGIP user guide for specific options for each monitor type.
+        Typically, tmsh arg names are used.
 
-
-        Keyword Args:               [ arg=val ] ...
-                                    Consult F5 BIGIP user guide for specific
-                                    options for each monitor type. Typically,
-                                    tmsh arg names are used.
-
-    CLI Example:
+    CLI Example::
 
         salt '*' bigip.modify_monitor bigip admin admin http my-http-monitor  timout=16 interval=6
 
@@ -1462,7 +1920,7 @@ def modify_monitor(hostname, username, password, monitor_type, name, **kwargs):
 
     #there's a ton of different monitors and a ton of options for each type of monitor.
     #this logic relies that the end user knows which options are meant for which monitor types
-    for key, value in kwargs.iteritems():
+    for key, value in six.iteritems(kwargs):
         if not key.startswith('__'):
             if key not in ['hostname', 'username', 'password', 'type', 'name']:
                 key = key.replace('_', '-')
@@ -1472,7 +1930,7 @@ def modify_monitor(hostname, username, password, monitor_type, name, **kwargs):
     try:
         response = bigip_session.put(BIG_IP_URL_BASE.format(host=hostname)+'/ltm/monitor/{type}/{name}'.format(type=monitor_type, name=name), data=json.dumps(payload))
     except requests.exceptions.ConnectionError as e:
-        return 'Error: Unable to connect to the bigip device: {hostname}\n{error}'.format(hostname=hostname, error=e)
+        return _load_connection_error(hostname, e)
 
     return _load_response(response)
 
@@ -1481,14 +1939,18 @@ def delete_monitor(hostname, username, password, monitor_type, name):
     '''
     A function to connect to a bigip device and delete an existing monitor.
 
-    Parameters:
-        hostname:                   The host/address of the bigip device
-        username:                   The iControl REST username
-        password:                   The iControl REST password
-        monitor_type:               The type of monitor to delete
-        name:                       The name of the monitor to delete
+    hostname
+        The host/address of the bigip device
+    username
+        The iControl REST username
+    password
+        The iControl REST password
+    monitor_type
+        The type of monitor to delete
+    name
+        The name of the monitor to delete
 
-    CLI Example:
+    CLI Example::
 
         salt '*' bigip.delete_monitor bigip admin admin http my-http-monitor
 
@@ -1501,7 +1963,7 @@ def delete_monitor(hostname, username, password, monitor_type, name):
     try:
         response = bigip_session.delete(BIG_IP_URL_BASE.format(host=hostname)+'/ltm/monitor/{type}/{name}'.format(type=monitor_type, name=name))
     except requests.exceptions.ConnectionError as e:
-        return 'Error: Unable to connect to the bigip device: {hostname}\n{error}'.format(hostname=hostname, error=e)
+        return _load_connection_error(hostname, e)
 
     if _load_response(response) == '':
         return True
@@ -1514,14 +1976,18 @@ def list_profile(hostname, username, password, profile_type, name=None, ):
     A function to connect to a bigip device and list an existing profile.  If no name is provided than all
     profiles of the specified type will be listed.
 
-    Parameters:
-        hostname:                   The host/address of the bigip device
-        username:                   The iControl REST username
-        password:                   The iControl REST password
-        profile_type:               The type of profile(s) to list
-        name:                       The name of the profile to list
+    hostname
+        The host/address of the bigip device
+    username
+        The iControl REST username
+    password
+        The iControl REST password
+    profile_type
+        The type of profile(s) to list
+    name
+        The name of the profile to list
 
-    CLI Example:
+    CLI Example::
 
         salt '*' bigip.list_profile bigip admin admin http my-http-profile
 
@@ -1537,7 +2003,7 @@ def list_profile(hostname, username, password, profile_type, name=None, ):
         else:
             response = bigip_session.get(BIG_IP_URL_BASE.format(host=hostname)+'/ltm/profile/{type}'.format(type=profile_type))
     except requests.exceptions.ConnectionError as e:
-        return 'Error: Unable to connect to the bigip device: {hostname}\n{error}'.format(hostname=hostname, error=e)
+        return _load_connection_error(hostname, e)
 
     return _load_response(response)
 
@@ -1546,44 +2012,48 @@ def create_profile(hostname, username, password, profile_type, name, **kwargs):
     r'''
     A function to connect to a bigip device and create a profile.
 
-    Parameters:
-        hostname:                   The host/address of the bigip device
-        username:                   The iControl REST username
-        password:                   The iControl REST password
-        profile_type:               The type of profile to create
-        name:                       The name of the profile to create
+    hostname
+        The host/address of the bigip device
+    username
+        The iControl REST username
+    password
+        The iControl REST password
+    profile_type
+        The type of profile to create
+    name
+        The name of the profile to create
+    kwargs
+        ``[ arg=val ] ... [arg=key1:val1,key2:val2] ...``
 
+        Consult F5 BIGIP user guide for specific options for each monitor type.
+        Typically, tmsh arg names are used.
 
-        Keyword Args:               [ arg=val ] ... [arg=key1:val1,key2:val2] ...
-                                    Consult F5 BIGIP user guide for specific
-                                    options for each monitor type. Typically,
-                                    tmsh arg names are used.
+    Creating Complex Args
+        Profiles can get pretty complicated in terms of the amount of possible
+        config options. Use the following shorthand to create complex arguments such
+        as lists, dictionaries, and lists of dictionaries. An option is also
+        provided to pass raw json as well.
 
-        Creating Complex Args:      Profiles can get pretty complicated in terms of the amount of
-                                    possible config options. Use the following shorthand to create
-                                    complex arguments such as lists, dictionaries, and lists of
-                                    dictionaries. An option is also provided to pass raw json as well.
+        lists ``[i,i,i]``:
+            ``param='item1,item2,item3'``
 
-                                    lists [i,i,i]:
-                                        param='item1,item2,item3'
+        Dictionary ``[k:v,k:v,k,v]``:
+            ``param='key-1:val-1,key-2:val2,key-3:va-3'``
 
-                                    Dictionary [k:v,k:v,k,v]:
-                                        param='key-1:val-1,key-2:val2,key-3:va-3'
+        List of Dictionaries ``[k:v,k:v|k:v,k:v|k:v,k:v]``:
+           ``param='key-1:val-1,key-2:val-2|key-1:val-1,key-2:val-2|key-1:val-1,key-2:val-2'``
 
-                                    List of Dictionaries [k:v,k:v|k:v,k:v|k:v,k:v]:
-                                       param='key-1:val-1,key-2:val-2|key-1:val-1,key-2:val-2|key-1:val-1,key-2:val-2'
+        JSON: ``'j{ ... }j'``:
+           ``cert-key-chain='j{ "default": { "cert": "default.crt", "chain": "default.crt", "key": "default.key" } }j'``
 
-                                    JSON: 'j{ ... }j':
-                                       cert-key-chain='j{ "default": { "cert": "default.crt", "chain": "default.crt", "key": "default.key" } }j'
+        Escaping Delimiters:
+            Use ``\,`` or ``\:`` or ``\|`` to escape characters which shouldn't
+            be treated as delimiters i.e. ``ciphers='DEFAULT\:!SSLv3'``
 
-                                    Escaping Delimiters:
-                                        Use  \, or \: or \|  to escape characters which shouldn't be treated as delimiters
-                                        i.e. ciphers='DEFAULT\:!SSLv3'
+    CLI Examples::
 
-        CLI Examples:
-
-            salt '*' bigip.create_profile bigip admin admin http my-http-profile defaultsFrom='/Common/http'
-            salt '*' bigip.create_profile bigip admin admin http my-http-profile defaultsFrom='/Common/http' \ \n
+        salt '*' bigip.create_profile bigip admin admin http my-http-profile defaultsFrom='/Common/http'
+        salt '*' bigip.create_profile bigip admin admin http my-http-profile defaultsFrom='/Common/http' \
             enforcement=maxHeaderCount:3200,maxRequests:10
 
     '''
@@ -1597,7 +2067,7 @@ def create_profile(hostname, username, password, profile_type, name, **kwargs):
 
     #there's a ton of different profiles and a ton of options for each type of profile.
     #this logic relies that the end user knows which options are meant for which profile types
-    for key, value in kwargs.iteritems():
+    for key, value in six.iteritems(kwargs):
         if not key.startswith('__'):
             if key not in ['hostname', 'username', 'password', 'profile_type']:
                 key = key.replace('_', '-')
@@ -1611,7 +2081,7 @@ def create_profile(hostname, username, password, profile_type, name, **kwargs):
     try:
         response = bigip_session.post(BIG_IP_URL_BASE.format(host=hostname)+'/ltm/profile/{type}'.format(type=profile_type), data=json.dumps(payload))
     except requests.exceptions.ConnectionError as e:
-        return 'Error: Unable to connect to the bigip device: {hostname}\n{error}'.format(hostname=hostname, error=e)
+        return _load_connection_error(hostname, e)
 
     return _load_response(response)
 
@@ -1620,48 +2090,57 @@ def modify_profile(hostname, username, password, profile_type, name, **kwargs):
     r'''
     A function to connect to a bigip device and create a profile.
 
-    Parameters:
-        hostname:                   The host/address of the bigip device
-        username:                   The iControl REST username
-        password:                   The iControl REST password
-        profile_type:               The type of profile to modify
-        name:                       The name of the profile to modify
+    A function to connect to a bigip device and create a profile.
 
+    hostname
+        The host/address of the bigip device
+    username
+        The iControl REST username
+    password
+        The iControl REST password
+    profile_type
+        The type of profile to create
+    name
+        The name of the profile to create
+    kwargs
+        ``[ arg=val ] ... [arg=key1:val1,key2:val2] ...``
 
-        Keyword Args:               [ arg=val ] ... [arg=key1:val1,key2:val2] ...
-                                    Consult F5 BIGIP user guide for specific
-                                    options for each monitor type. Typically,
-                                    tmsh arg names are used.
+        Consult F5 BIGIP user guide for specific options for each monitor type.
+        Typically, tmsh arg names are used.
 
-        Creating Complex Args:      Profiles can get pretty complicated in terms of the amount of
-                                    possible config options. Use the following shorthand to create
-                                    complex arguments such as lists, dictionaries, and lists of
-                                    dictionaries. An option is also provided to pass raw json as well.
+    Creating Complex Args
 
-                                    lists [i,i,i]:
-                                        param='item1,item2,item3'
+        Profiles can get pretty complicated in terms of the amount of possible
+        config options. Use the following shorthand to create complex arguments such
+        as lists, dictionaries, and lists of dictionaries. An option is also
+        provided to pass raw json as well.
 
-                                    Dictionary [k:v,k:v,k,v]:
-                                        param='key-1:val-1,key-2:val2,key-3:va-3'
+        lists ``[i,i,i]``:
+            ``param='item1,item2,item3'``
 
-                                    List of Dictionaries [k:v,k:v|k:v,k:v|k:v,k:v]:
-                                       param='key-1:val-1,key-2:val-2|key-1:val-1,key-2:val-2|key-1:val-1,key-2:val-2'
+        Dictionary ``[k:v,k:v,k,v]``:
+            ``param='key-1:val-1,key-2:val2,key-3:va-3'``
 
-                                    JSON: 'j{ ... }j':
-                                       cert-key-chain='j{ "default": { "cert": "default.crt", "chain": "default.crt", "key": "default.key" } }j'
+        List of Dictionaries ``[k:v,k:v|k:v,k:v|k:v,k:v]``:
+           ``param='key-1:val-1,key-2:val-2|key-1:val-1,key-2:val-2|key-1:val-1,key-2:val-2'``
 
-                                    Escaping Delimiters:
-                                        Use  \, or \: or \|  to escape characters which shouldn't be treated as delimiters
-                                        i.e. ciphers='DEFAULT\:!SSLv3'
+        JSON: ``'j{ ... }j'``:
+           ``cert-key-chain='j{ "default": { "cert": "default.crt", "chain": "default.crt", "key": "default.key" } }j'``
 
-        CLI Examples:
+        Escaping Delimiters:
+            Use ``\,`` or ``\:`` or ``\|`` to escape characters which shouldn't
+            be treated as delimiters i.e. ``ciphers='DEFAULT\:!SSLv3'``
 
-            salt '*' bigip.modify_profile bigip admin admin http my-http-profile defaultsFrom='/Common/http'
-            salt '*' bigip.modify_profile bigip admin admin http my-http-profile defaultsFrom='/Common/http' \ \n
+    CLI Examples::
+
+        salt '*' bigip.modify_profile bigip admin admin http my-http-profile defaultsFrom='/Common/http'
+
+        salt '*' bigip.modify_profile bigip admin admin http my-http-profile defaultsFrom='/Common/http' \
             enforcement=maxHeaderCount:3200,maxRequests:10
 
-            salt '*' bigip.modify_profile bigip admin admin client-ssl my-client-ssl-1 retainCertificate=false \ \n
-            ciphers='DEFAULT\:!SSLv3' cert_key_chain='j{ "default": { "cert": "default.crt", "chain": "default.crt", "key": "default.key" } }j'
+        salt '*' bigip.modify_profile bigip admin admin client-ssl my-client-ssl-1 retainCertificate=false \
+            ciphers='DEFAULT\:!SSLv3'
+            cert_key_chain='j{ "default": { "cert": "default.crt", "chain": "default.crt", "key": "default.key" } }j'
     '''
 
     #build session
@@ -1673,7 +2152,7 @@ def modify_profile(hostname, username, password, profile_type, name, **kwargs):
 
     #there's a ton of different profiles and a ton of options for each type of profile.
     #this logic relies that the end user knows which options are meant for which profile types
-    for key, value in kwargs.iteritems():
+    for key, value in six.iteritems(kwargs):
         if not key.startswith('__'):
             if key not in ['hostname', 'username', 'password', 'profile_type']:
                 key = key.replace('_', '-')
@@ -1685,9 +2164,9 @@ def modify_profile(hostname, username, password, profile_type, name, **kwargs):
 
     #put to REST
     try:
-        response = bigip_session.put(BIG_IP_URL_BASE.format(hostname)+'/ltm/profile/{type}/{name}'.format(type=profile_type, name=name), data=json.dumps(payload))
+        response = bigip_session.put(BIG_IP_URL_BASE.format(host=hostname)+'/ltm/profile/{type}/{name}'.format(type=profile_type, name=name), data=json.dumps(payload))
     except requests.exceptions.ConnectionError as e:
-        return 'Error: Unable to connect to the bigip device: {hostname}\n{error}'.format(hostname=hostname, error=e)
+        return _load_connection_error(hostname, e)
 
     return _load_response(response)
 
@@ -1696,14 +2175,18 @@ def delete_profile(hostname, username, password, profile_type, name):
     '''
     A function to connect to a bigip device and delete an existing profile.
 
-    Parameters:
-        hostname:                   The host/address of the bigip device
-        username:                   The iControl REST username
-        password:                   The iControl REST password
-        profile_type:               The type of profile to delete
-        name:                       The name of the profile to delete
+    hostname
+        The host/address of the bigip device
+    username
+        The iControl REST username
+    password
+        The iControl REST password
+    profile_type
+        The type of profile to delete
+    name
+        The name of the profile to delete
 
-    CLI Example:
+    CLI Example::
 
         salt '*' bigip.delete_profile bigip admin admin http my-http-profile
 
@@ -1716,7 +2199,7 @@ def delete_profile(hostname, username, password, profile_type, name):
     try:
         response = bigip_session.delete(BIG_IP_URL_BASE.format(host=hostname)+'/ltm/profile/{type}/{name}'.format(type=profile_type, name=name))
     except requests.exceptions.ConnectionError as e:
-        return 'Error: Unable to connect to the bigip device: {hostname}\n{error}'.format(hostname=hostname, error=e)
+        return _load_connection_error(hostname, e)
 
     if _load_response(response) == '':
         return True

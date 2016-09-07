@@ -16,14 +16,17 @@ import shutil
 import sys
 import os
 import stat
+import subprocess
 
 THIN_ARCHIVE = 'salt-thin.tgz'
 EXT_ARCHIVE = 'salt-ext_mods.tgz'
 
-# Keep these in sync with salt/exitcodes.py
+# Keep these in sync with salt/defaults/exitcodes.py
 EX_THIN_DEPLOY = 11
 EX_THIN_CHECKSUM = 12
 EX_MOD_DEPLOY = 13
+EX_SCP_NOT_FOUND = 14
+EX_CANTCREAT = 73
 
 
 class OBJ(object):
@@ -62,9 +65,14 @@ def need_deployment():
     # If SUDOing then also give the super user group write permissions
     sudo_gid = os.environ.get('SUDO_GID')
     if sudo_gid:
-        os.chown(OPTIONS.saltdir, -1, int(sudo_gid))
-        stt = os.stat(OPTIONS.saltdir)
-        os.chmod(OPTIONS.saltdir, stt.st_mode | stat.S_IWGRP | stat.S_IRGRP | stat.S_IXGRP)
+        try:
+            os.chown(OPTIONS.saltdir, -1, int(sudo_gid))
+            stt = os.stat(OPTIONS.saltdir)
+            os.chmod(OPTIONS.saltdir, stt.st_mode | stat.S_IWGRP | stat.S_IRGRP | stat.S_IXGRP)
+        except OSError:
+            sys.stdout.write('\n\nUnable to set permissions on thin directory.\nIf sudo_user is set '
+                    'and is not root, be certain the user is in the same group\nas the login user')
+            sys.exit(1)
 
     # Delimiter emitted on stdout *only* to indicate shim message to master.
     sys.stdout.write("{0}\ndeploy\n".format(OPTIONS.delimiter))
@@ -89,8 +97,10 @@ def get_hash(path, form='sha1', chunk_size=4096):
 def unpack_thin(thin_path):
     """Unpack the Salt thin archive."""
     tfile = tarfile.TarFile.gzopen(thin_path)
+    old_umask = os.umask(0o077)
     tfile.extractall(path=OPTIONS.saltdir)
     tfile.close()
+    os.umask(old_umask)
     os.unlink(thin_path)
 
 
@@ -111,8 +121,10 @@ def unpack_ext(ext_path):
             'minion',
             'extmods')
     tfile = tarfile.TarFile.gzopen(ext_path)
+    old_umask = os.umask(0o077)
     tfile.extractall(path=modcache)
     tfile.close()
+    os.umask(old_umask)
     os.unlink(ext_path)
     ver_path = os.path.join(modcache, 'ext_version')
     ver_dst = os.path.join(OPTIONS.saltdir, 'ext_version')
@@ -124,14 +136,14 @@ def main(argv):  # pylint: disable=W0613
     thin_path = os.path.join(OPTIONS.saltdir, THIN_ARCHIVE)
     if os.path.isfile(thin_path):
         if OPTIONS.checksum != get_hash(thin_path, OPTIONS.hashfunc):
-            sys.stderr.write('{0}\n'.format(OPTIONS.checksum))
-            sys.stderr.write('{0}\n'.format(get_hash(thin_path, OPTIONS.hashfunc)))
-            os.unlink(thin_path)
-            sys.stderr.write('WARNING: checksum mismatch for "{0}"\n'.format(thin_path))
-            sys.exit(EX_THIN_CHECKSUM)
+            need_deployment()
         unpack_thin(thin_path)
         # Salt thin now is available to use
     else:
+        scpstat = subprocess.Popen(['/bin/sh', '-c', 'command -v scp']).wait()
+        if scpstat != 0:
+            sys.exit(EX_SCP_NOT_FOUND)
+
         if not os.path.exists(OPTIONS.saltdir):
             need_deployment()
 
@@ -140,7 +152,7 @@ def main(argv):  # pylint: disable=W0613
                 'ERROR: salt path "{0}" exists but is'
                 ' not a directory\n'.format(OPTIONS.saltdir)
             )
-            sys.exit(os.EX_CANTCREAT)
+            sys.exit(EX_CANTCREAT)
 
         version_path = os.path.join(OPTIONS.saltdir, 'version')
         if not os.path.exists(version_path) or not os.path.isfile(version_path):
@@ -189,6 +201,7 @@ def main(argv):  # pylint: disable=W0613
     salt_argv = [
         sys.executable,
         salt_call_path,
+        '--retcode-passthrough',
         '--local',
         '--metadata',
         '--out', 'json',
@@ -203,21 +216,24 @@ def main(argv):  # pylint: disable=W0613
     # Yes, the flush() is necessary.
     sys.stdout.write(OPTIONS.delimiter + '\n')
     sys.stdout.flush()
-    sys.stderr.write(OPTIONS.delimiter + '\n')
-    sys.stderr.flush()
+    if not OPTIONS.tty:
+        sys.stderr.write(OPTIONS.delimiter + '\n')
+        sys.stderr.flush()
+    if OPTIONS.cmd_umask is not None:
+        old_umask = os.umask(OPTIONS.cmd_umask)
     if OPTIONS.tty:
-        import subprocess
         stdout, _ = subprocess.Popen(salt_argv, stdout=subprocess.PIPE, stderr=subprocess.PIPE).communicate()
         sys.stdout.write(stdout)
         sys.stdout.flush()
         if OPTIONS.wipe:
             shutil.rmtree(OPTIONS.saltdir)
     elif OPTIONS.wipe:
-        import subprocess
         subprocess.call(salt_argv)
         shutil.rmtree(OPTIONS.saltdir)
     else:
-        os.execv(sys.executable, salt_argv)
+        subprocess.call(salt_argv)
+    if OPTIONS.cmd_umask is not None:
+        os.umask(old_umask)
 
 if __name__ == '__main__':
     sys.exit(main(sys.argv))

@@ -1,13 +1,14 @@
 # -*- coding: utf-8 -*-
 '''
-.. versionadded:: Beryllium
+.. versionadded:: 2015.8.0
 
-Utilities for accessing storage container blogs on Azure
+Utilities for accessing storage container blobs on Azure
 '''
 
 # Import python libs
 from __future__ import absolute_import
 import logging
+import inspect
 
 # Import azure libs
 HAS_LIBS = False
@@ -26,7 +27,7 @@ log = logging.getLogger(__name__)
 
 def get_storage_conn(storage_account=None, storage_key=None, opts=None):
     '''
-    .. versionadded:: Beryllium
+    .. versionadded:: 2015.8.0
 
     Return a storage_conn object for the storage account
     '''
@@ -43,7 +44,7 @@ def get_storage_conn(storage_account=None, storage_key=None, opts=None):
 
 def list_blobs(storage_conn=None, **kwargs):
     '''
-    .. versionadded:: Beryllium
+    .. versionadded:: 2015.8.0
 
     List blobs associated with the container
     '''
@@ -73,7 +74,7 @@ def list_blobs(storage_conn=None, **kwargs):
 
 def put_blob(storage_conn=None, **kwargs):
     '''
-    .. versionadded:: Beryllium
+    .. versionadded:: 2015.8.0
 
     Upload a blob
     '''
@@ -123,7 +124,7 @@ def put_blob(storage_conn=None, **kwargs):
 
 def get_blob(storage_conn=None, **kwargs):
     '''
-    .. versionadded:: Beryllium
+    .. versionadded:: 2015.8.0
 
     Download a blob
     '''
@@ -170,14 +171,15 @@ def get_blob(storage_conn=None, **kwargs):
 
 def object_to_dict(obj):
     '''
-    .. versionadded:: Beryllium
+    .. versionadded:: 2015.8.0
 
     Convert an object to a dictionary
     '''
-    if isinstance(obj, list):
+    if isinstance(obj, list) or isinstance(obj, tuple):
         ret = []
         for item in obj:
-            ret.append(obj.__dict__[item])
+            #ret.append(obj.__dict__[item])
+            ret.append(object_to_dict(obj))
     elif isinstance(obj, six.text_type):
         ret = obj.encode('ascii', 'replace'),
     elif isinstance(obj, six.string_types):
@@ -185,13 +187,16 @@ def object_to_dict(obj):
     else:
         ret = {}
         for item in dir(obj):
-            if item.startswith('__'):
+            if item.startswith('_'):
                 continue
             # This is ugly, but inspect.isclass() doesn't seem to work
-            if 'class' in str(type(obj.__dict__[item])):
-                ret[item] = object_to_dict(obj.__dict__[item])
-            elif isinstance(obj.__dict__[item], six.text_type):
-                ret[item] = obj.__dict__[item].encode('ascii', 'replace'),
-            else:
-                ret[item] = obj.__dict__[item]
+            try:
+                if inspect.isclass(obj) or 'class' in str(type(obj.__dict__.get(item))):
+                    ret[item] = object_to_dict(obj.__dict__[item])
+                elif isinstance(obj.__dict__[item], six.text_type):
+                    ret[item] = obj.__dict__[item].encode('ascii', 'replace')
+                else:
+                    ret[item] = obj.__dict__[item]
+            except AttributeError:
+                ret[item] = obj.get(item)
     return ret

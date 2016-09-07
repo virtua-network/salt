@@ -46,7 +46,7 @@ paradigm. This allows for many new capabilities to be added to Salt in the
 upcoming releases.
 
 Please keep in mind that this is a beta release of RAET and we hope for bugs to
-be worked out, performance to be better realized and more in the 2015.2.0
+be worked out, performance to be better realized and more in the 2015.5.0
 release.
 
 Simply stated, users running Salt with RAET should expect some hiccups as we
@@ -466,7 +466,7 @@ Configurable Trunk/Branches/Tags Paths
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
 Prior to this release, the paths where trunk, branches, and tags were located
-could only be in directores named "trunk", "branches", and "tags" directly
+could only be in directories named "trunk", "branches", and "tags" directly
 under the root of the repository. Three new config parameters
 (:conf_master:`svnfs_trunk`, :conf_master:`svnfs_branches`, and
 :conf_master:`svnfs_tags`) allow SVN repositories which are laid out
@@ -551,7 +551,7 @@ New Salt-Cloud Providers
 Salt Call Change
 ================
 
-When used with a returner, salt-call now contacts a master if ``--local`` 
+When used with a returner, salt-call now contacts a master if ``--local``
 is not specicified.
 
 

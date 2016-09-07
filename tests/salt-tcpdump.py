@@ -40,7 +40,7 @@ import socket
 from struct import unpack
 import pcapy
 import sys
-import argparse
+import argparse  # pylint: disable=minimum-python-version
 import time
 
 
@@ -124,7 +124,7 @@ class PCAPParser(object):
                            'tcp': {}
                           }
 
-            (header, packet) = cap.next()  # pylint: disable=W1699
+            (header, packet) = cap.next()  # pylint: disable=incompatible-py3-code
 
             eth_length, eth_protocol = self.parse_ether(packet)
 

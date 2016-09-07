@@ -11,6 +11,7 @@ import os
 import logging
 
 # Import salt libs
+import salt.config
 import salt.utils
 try:
     # Gated for salt-ssh (salt.utils.cloud imports msgpack)
@@ -25,6 +26,12 @@ import salt.utils.sdb as sdb
 
 # Import 3rd-party libs
 import salt.ext.six as six
+
+if salt.utils.is_windows():
+    _HOSTS_FILE = os.path.join(
+        os.environ['SystemRoot'], 'System32', 'drivers', 'etc', 'hosts')
+else:
+    _HOSTS_FILE = os.path.join(os.sep, 'etc', 'hosts')
 
 log = logging.getLogger(__name__)
 
@@ -64,7 +71,7 @@ DEFAULTS = {'mongo.db': 'salt',
             'ldap.attrs': None,
             'ldap.binddn': '',
             'ldap.bindpw': '',
-            'hosts.file': '/etc/hosts',
+            'hosts.file': _HOSTS_FILE,
             'aliases.file': '/etc/aliases',
             'virt.images': os.path.join(syspaths.SRV_ROOT_DIR, 'salt-images'),
             'virt.tunnel': False,
@@ -96,17 +103,10 @@ def manage_mode(mode):
 
         salt '*' config.manage_mode
     '''
-    if mode is None:
-        return None
-    if not isinstance(mode, six.string_types):
-        # Make it a string in case it's not
-        mode = str(mode)
-    # Strip any quotes and initial 0, though zero-pad it up to 4
-    ret = mode.strip('"').strip('\'').lstrip('0').zfill(4)
-    if ret[0] != '0':
-        # Always include a leading zero
-        return '0{0}'.format(ret)
-    return ret
+    # config.manage_mode should no longer be invoked from the __salt__ dunder
+    # in Salt code, this function is only being left here for backwards
+    # compatibility.
+    return salt.utils.normalize_mode(mode)
 
 
 def valid_fileproto(uri):
@@ -235,32 +235,57 @@ def get(key, default='', delimiter=':', merge=None):
 
     The ``:`` (colon) is used to represent a nested dictionary level.
 
-    .. versionchanged:: 2015.2.0
+    .. versionchanged:: 2015.5.0
         The ``delimiter`` argument was added, to allow delimiters other than
         ``:`` to be used.
 
     This function traverses these data stores in this order, returning the
     first match found:
 
-    - Minion config file
+    - Minion configuration
     - Minion's grains
     - Minion's pillar data
-    - Master config file
+    - Master configuration (requires :conf_minion:`pillar_opts` to be set to
+      ``True`` in Minion config file in order to work)
 
     This means that if there is a value that is going to be the same for the
     majority of minions, it can be configured in the Master config file, and
     then overridden using the grains, pillar, or Minion config file.
 
+    Adding config options to the Master or Minion configuration file is easy:
+
+    .. code-block:: yaml
+
+        my-config-option: value
+        cafe-menu:
+          - egg and bacon
+          - egg sausage and bacon
+          - egg and spam
+          - egg bacon and spam
+          - egg bacon sausage and spam
+          - spam bacon sausage and spam
+          - spam egg spam spam bacon and spam
+          - spam sausage spam spam bacon spam tomato and spam
+
+    .. note::
+        Minion configuration options built into Salt (like those defined
+        :ref:`here <configuration-salt-minion>`) will *always* be defined in
+        the Minion configuration and thus *cannot be overridden by grains or
+        pillar data*. However, additional (user-defined) configuration options
+        (as in the above example) will not be in the Minion configuration by
+        default and thus can be overridden using grains/pillar data by leaving
+        the option out of the minion config file.
+
     **Arguments**
 
     delimiter
-        .. versionadded:: 2015.2.0
+        .. versionadded:: 2015.5.0
 
         Override the delimiter used to separate nested levels of a data
         structure.
 
     merge
-        .. versionadded:: 2015.2.0
+        .. versionadded:: 2015.5.0
 
         If passed, this parameter will change the behavior of the function so
         that, instead of traversing each data store above in order and
@@ -357,10 +382,12 @@ def get(key, default='', delimiter=':', merge=None):
                         'to \'recurse\'.'.format(merge))
             merge = 'recurse'
 
+        merge_lists = salt.config.master_config('/etc/salt/master').get('pillar_merge_lists')
+
         data = copy.copy(__pillar__.get('master', {}))
-        data = salt.utils.dictupdate.merge(data, __pillar__, strategy=merge)
-        data = salt.utils.dictupdate.merge(data, __grains__, strategy=merge)
-        data = salt.utils.dictupdate.merge(data, __opts__, strategy=merge)
+        data = salt.utils.dictupdate.merge(data, __pillar__, strategy=merge, merge_lists=merge_lists)
+        data = salt.utils.dictupdate.merge(data, __grains__, strategy=merge, merge_lists=merge_lists)
+        data = salt.utils.dictupdate.merge(data, __opts__, strategy=merge, merge_lists=merge_lists)
         ret = salt.utils.traverse_dict_and_list(data,
                                                 key,
                                                 '_|-',

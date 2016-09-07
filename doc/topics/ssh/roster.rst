@@ -1,3 +1,5 @@
+.. _ssh-roster:
+
 ============
 Salt Rosters
 ============
@@ -23,36 +25,47 @@ How Rosters Work
 ================
 
 The roster system compiles a data structure internally referred to as
-`targets`. The `targets` is a list of target systems and attributes about how
+``targets``. The ``targets`` is a list of target systems and attributes about how
 to connect to said systems. The only requirement for a roster module in Salt
-is to return the `targets` data structure.
+is to return the ``targets`` data structure.
 
 Targets Data
 ------------
 
-The information which can be stored in a roster `target` is the following:
+The information which can be stored in a roster ``target`` is the following:
 
 .. code-block:: yaml
 
-    <Salt ID>:    # The id to reference the target system with
-        host:     # The IP address or DNS name of the remote host
-        user:     # The user to log in as
-        passwd:   # The password to log in with
+    <Salt ID>:       # The id to reference the target system with
+        host:        # The IP address or DNS name of the remote host
+        user:        # The user to log in as
+        passwd:      # The password to log in with
 
         # Optional parameters
-        port:     # The target system's ssh port number
-        sudo:     # Boolean to run command via sudo
-        priv:     # File path to ssh private key, defaults to salt-ssh.rsa
-        timeout:  # Number of seconds to wait for response when establishing a
-                    SSH connection
-        thin_dir: # The target system's storage directory for Salt components.
-                    Defaults to /tmp/salt-<hash>.
+        port:        # The target system's ssh port number
+        sudo:        # Boolean to run command via sudo
+        sudo_user:   # Str: Set this to execute Salt as a sudo user other than root.
+                     # This user must be in the same system group as the remote user
+                     # that is used to login and is specified above. Alternatively,
+                     # the user must be a super-user.
+        tty:         # Boolean: Set this option to True if sudo is also set to
+                     # True and requiretty is also set on the target system
+        priv:        # File path to ssh private key, defaults to salt-ssh.rsa
+                     # The priv can also be set to agent-forwarding to not specify
+                     # a key, but use ssh agent forwarding
+        timeout:     # Number of seconds to wait for response when establishing
+                     # an SSH connection
+        minion_opts: # Dictionary of minion opts
+        thin_dir:    # The target system's storage directory for Salt
+                     # components. Defaults to /tmp/salt-<hash>.
+        cmd_umask:   # umask to enforce for the salt-call command. Should be in
+                     # octal (so for 0o077 in YAML you would do 0077, or 63)
 
 thin_dir
 --------
 
 Salt needs to upload a standalone environment to the target system, and this
-defaults to /tmp/salt-<hash>. This directory will be cleaned up per normal 
+defaults to /tmp/salt-<hash>. This directory will be cleaned up per normal
 systems operation.
 
 If you need a persistent Salt environment, for instance to set persistent grains,

@@ -65,7 +65,7 @@ def __virtual__():
     '''
     if HAS_LIBS:
         return __virtualname__
-    return False
+    return (False, 'This module is only loaded if smtplib is available')
 
 
 def send_msg(recipient,
@@ -80,7 +80,9 @@ def send_msg(recipient,
     '''
     Send a message to an SMTP recipient. Designed for use in states.
 
-    CLI Examples::
+    CLI Examples:
+
+    .. code-block:: bash
 
         smtp.send_msg 'admin@example.com' 'This is a salt module test' \
             profile='my-smtp-account'

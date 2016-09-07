@@ -24,7 +24,7 @@ import salt.utils
 
 KNOWN_HOSTS = os.path.join(integration.TMP, 'known_hosts')
 GITHUB_FINGERPRINT = '16:27:ac:a5:76:28:2d:36:63:1b:56:4d:eb:df:a6:48'
-GITHUB_IP = '192.30.252.129'
+GITHUB_IP = '192.30.253.113'
 
 
 @skip_if_binaries_missing(['ssh', 'ssh-keygen'], check_all=True)
@@ -92,7 +92,7 @@ class SSHKnownHostsStateTest(integration.ModuleCase,
             self.assertNotIn(ret, ('', None))
         except AssertionError:
             raise AssertionError(
-                'Salt return {0!r} is in (\'\', None).'.format(ret)
+                'Salt return \'{0}\' is in (\'\', None).'.format(ret)
             )
         ret = self.run_function(
             'ssh.get_known_host', ['root', GITHUB_IP], config=KNOWN_HOSTS
@@ -101,7 +101,7 @@ class SSHKnownHostsStateTest(integration.ModuleCase,
             self.assertNotIn(ret, ('', None, {}))
         except AssertionError:
             raise AssertionError(
-                'Salt return {0!r} is in (\'\', None,'.format(ret) + ' {})'
+                'Salt return \'{0}\' is in (\'\', None,'.format(ret) + ' {})'
             )
 
     def test_present_fail(self):
@@ -246,4 +246,4 @@ class SSHAuthStateTests(integration.ModuleCase,
 
 if __name__ == '__main__':
     from integration import run_tests
-    run_tests(SSHKnownHostsStateTest)
+    run_tests([SSHKnownHostsStateTest, SSHAuthStateTests])

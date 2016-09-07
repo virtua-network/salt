@@ -1,4 +1,7 @@
 GitPython==0.3.2.RC1
-halite
+dateutils
+pyghmi
+croniter
+Mako
+gnupg
 -r ../../../requirements/opt.txt
--r ../../../requirements/cloud.txt

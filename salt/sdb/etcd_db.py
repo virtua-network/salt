@@ -7,7 +7,7 @@ etcd Database Module
 :depends:       python-etcd
 :platform:      all
 
-.. versionadded:: 2015.2.0
+.. versionadded:: 2015.5.0
 
 This module allows access to the etcd database using an ``sdb://`` URI. This
 package is located at ``https://pypi.python.org/pypi/python-etcd``.
@@ -76,6 +76,18 @@ def get(key, service=None, profile=None):  # pylint: disable=W0613
     client = _get_conn(profile)
     result = client.get(key)
     return result.value
+
+
+def delete(key, service=None, profile=None):  # pylint: disable=W0613
+    '''
+    Get a value from the etcd service
+    '''
+    client = _get_conn(profile)
+    try:
+        client.delete(key)
+        return True
+    except Exception:
+        return False
 
 
 def _get_conn(profile):

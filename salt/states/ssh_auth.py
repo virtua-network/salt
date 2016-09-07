@@ -29,6 +29,7 @@ to use a YAML 'explicit key', as demonstrated in the second example below.
       ssh_auth.present:
         - user: root
         - source: salt://ssh_keys/thatch.id_rsa.pub
+        - config: '%h/.ssh/authorized_keys'
 
     sshkeys:
       ssh_auth.present:
@@ -188,6 +189,7 @@ def _absent_test(user, name, enc, comment, options, source, config):
         comment = ('Key {0} for user {1} is set for removal').format(name, user)
     else:
         comment = ('Key is already absent')
+        result = True
 
     return result, comment
 
@@ -239,7 +241,8 @@ def present(
 
     config
         The location of the authorized keys file relative to the user's home
-        directory, defaults to ".ssh/authorized_keys"
+        directory, defaults to ".ssh/authorized_keys". Token expansion %u and
+        %h for username and home path supported.
     '''
     ret = {'name': name,
            'changes': {},
@@ -252,7 +255,7 @@ def present(
         fullkey = sshre.search(name)
         # if it is {key} [comment]
         if not fullkey:
-            key_and_comment = name.split()
+            key_and_comment = name.split(None, 1)
             name = key_and_comment[0]
             if len(key_and_comment) == 2:
                 comment = key_and_comment[1]
@@ -261,7 +264,7 @@ def present(
             if fullkey.group(1):
                 options = fullkey.group(1).split(',')
             # key is of format: {enc} {key} [comment]
-            comps = fullkey.group(2).split()
+            comps = fullkey.group(2).split(None, 2)
             enc = comps[0]
             name = comps[1]
             if len(comps) == 3:
@@ -279,7 +282,16 @@ def present(
                 )
         return ret
 
+    # Get only the path to the file without env referrences to check if exists
     if source != '':
+        source_path = __salt__['cp.get_url'](
+                        source,
+                        None,
+                        saltenv=__env__)
+
+    if source != '' and not source_path:
+        data = 'no key'
+    elif source != '' and source_path:
         key = __salt__['cp.get_file_str'](
                 source,
                 saltenv=__env__)
@@ -329,6 +341,10 @@ def present(
         ret['changes'][name] = 'New'
         ret['comment'] = ('The authorized host key {0} for user {1} was added'
                           .format(name, user))
+    elif data == 'no key':
+        ret['result'] = False
+        ret['comment'] = ('Failed to add the ssh key. Source file {0} is '
+                          'missing'.format(source))
     elif data == 'fail':
         ret['result'] = False
         err = sys.modules[
@@ -378,16 +394,30 @@ def absent(name,
         in standard "authorized_keys" format. If this is set, comment, enc and
         options will be ignored.
 
-        .. versionadded:: Beryllium
+        .. versionadded:: 2015.8.0
 
     config
         The location of the authorized keys file relative to the user's home
-        directory, defaults to ".ssh/authorized_keys"
+        directory, defaults to ".ssh/authorized_keys". Token expansion %u and
+        %h for username and home path supported.
+
     '''
     ret = {'name': name,
            'changes': {},
            'result': True,
            'comment': ''}
+
+    if __opts__['test']:
+        ret['result'], ret['comment'] = _absent_test(
+                user,
+                name,
+                enc,
+                comment,
+                options or [],
+                source,
+                config,
+                )
+        return ret
 
     # Extract Key from file if source is present
     if source != '':
@@ -432,18 +462,6 @@ def absent(name,
             if len(comps) == 3:
                 comment = comps[2]
         ret['comment'] = __salt__['ssh.rm_auth_key'](user, name, config)
-
-    if __opts__['test']:
-        ret['result'], ret['comment'] = _absent_test(
-                user,
-                name,
-                enc,
-                comment,
-                options or [],
-                source,
-                config,
-                )
-        return ret
 
     if ret['comment'] == 'User authorized keys file not present':
         ret['result'] = False

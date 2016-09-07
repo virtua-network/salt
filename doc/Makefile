@@ -67,7 +67,7 @@ help:
 
 clean:
 	rm -rf $(BUILDDIR)/*
-	test -d 'locale' && find locale/ -name *.mo -exec rm {} \;
+	test -d 'locale' && find locale/ -name *.mo -exec rm {} \; || true
 
 html: translations
 	$(SPHINXBUILD) -b html $(ALLSPHINXOPTS) $(BUILDDIR)/html
@@ -154,7 +154,7 @@ pdf: translations
 
 cheatsheet: translations
 	@echo "Running cheatsheet/salt.tex file through xelatex..."
-	cd cheatsheet &&  xelatex salt.tex && cp salt.pdf ../salt-cheatsheet.pdf 
+	cd cheatsheet &&  xelatex salt.tex && cp salt.pdf ../salt-cheatsheet.pdf
 	@echo "./salt-cheatsheet.pdf created."
 
 text: translations

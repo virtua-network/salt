@@ -170,7 +170,7 @@ this:
 So the httpd.conf is just a file in the apache directory, and is referenced
 directly.
 
-.. include:: /_incl/sls_filename_cant_contain_period.rst
+.. include:: ../../_incl/_incl/sls_filename_cant_contain_period.rst
 
 But when using more than one single SLS file, more components can be added to
 the toolkit. Consider this SSH example:
@@ -308,7 +308,7 @@ to configure the banner.
 In the new mod_python SLS the mod_python package is added, but more importantly
 the apache service was extended to also watch the mod_python package.
 
-.. include:: /_incl/extend_with_require_watch.rst
+.. include:: ../../_incl/extend_with_require_watch.rst
 
 
 Understanding the Render System
@@ -533,17 +533,22 @@ This example clearly illustrates that; one, using the YAML renderer by default
 is a wise decision and two, unbridled power can be obtained where needed by
 using a pure Python SLS.
 
-Running and debugging salt states.
-----------------------------------
+Running and Debugging Salt States
+---------------------------------
 
 Once the rules in an SLS are ready, they should be tested to ensure they
 work properly. To invoke these rules, simply execute
-``salt '*' state.highstate`` on the command line. If you get back only
+``salt '*' state.apply`` on the command line. If you get back only
 hostnames with a ``:`` after, but no return, chances are there is a problem with
-one or more of the sls files. On the minion, use the ``salt-call`` command:
-``salt-call state.highstate -l debug`` to examine the output for errors.
-This should help troubleshoot the issue. The minions can also be started in
-the foreground in debug mode: ``salt-minion -l debug``.
+one or more of the sls files. On the minion, use the ``salt-call`` command to
+examine the output for errors:
+
+.. code-block:: bash
+
+    salt-call state.apply -l debug
+
+This should help troubleshoot the issue. The minion can also be started in the
+foreground in debug mode by running ``salt-minion -l debug``.
 
 Next Reading
 ============

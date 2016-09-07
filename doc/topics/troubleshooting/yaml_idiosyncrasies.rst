@@ -110,7 +110,22 @@ PyYAML will load these values as boolean ``True`` or ``False``. Un-capitalized
 versions will also be loaded as booleans (``true``, ``false``, ``yes``, ``no``,
 ``on``, and ``off``). This can be especially problematic when constructing
 Pillar data. Make sure that your Pillars which need to use the string versions
-of these values are enclosed in quotes.
+of these values are enclosed in quotes.  Pillars will be parsed twice by salt,
+so you'll need to wrap your values in multiple quotes, for example '"false"'.
+
+The '%' Sign
+============
+
+The `%` symbol has a special meaning in YAML, it needs to be passed as a
+string literal:
+
+.. code-block:: yaml
+
+    cheese:
+      ssh_auth.present:
+        - user: tbortels
+        - source: salt://ssh_keys/chease.pub
+        - config: '%h/.ssh/authorized_keys'
 
 Integers are Parsed as Integers
 ===============================
@@ -272,8 +287,8 @@ This shell command can find wrong characters in your SLS files:
 
 
 Alternatively you can toggle the `yaml_utf8` setting in your master configuration
- file. This is still an experimental setting but it should manage the right
- encoding conversion in salt after yaml states compilations.
+file. This is still an experimental setting but it should manage the right
+encoding conversion in salt after yaml states compilations.
 
 Underscores stripped in Integer Definitions
 ===========================================
@@ -340,3 +355,13 @@ string with quotes:
     ValueError: month must be in 1..12
     >>> yaml.safe_load('"4017-16-20"')
     '4017-16-20'
+
+
+Keys Limited to 1024 Characters
+===============================
+
+Simple keys are limited to a single line and cannot be longer that 1024 characters.
+This is a limitation from PyYaml, as seen in a comment in `PyYAML's code`_, and
+applies to anything parsed by YAML in Salt.
+
+.. _PyYAML's code: http://pyyaml.org/browser/pyyaml/trunk/lib/yaml/scanner.py#L91

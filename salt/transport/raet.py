@@ -99,7 +99,7 @@ class RAETReqChannel(ReqChannel):
         if kind in [kinds.APPL_KIND_NAMES[kinds.applKinds.master],
                     kinds.APPL_KIND_NAMES[kinds.applKinds.syndic]]:
             lanename = 'master'
-        elif kind == [kinds.APPL_KIND_NAMES[kinds.applKinds.minion],
+        elif kind in [kinds.APPL_KIND_NAMES[kinds.applKinds.minion],
                       kinds.APPL_KIND_NAMES[kinds.applKinds.caller]]:
             lanename = "{0}_{1}".format(role, kind)
         else:
@@ -112,7 +112,7 @@ class RAETReqChannel(ReqChannel):
                           lanename=lanename,
                           sockdirpath=self.opts['sock_dir'])
 
-        stack.Pk = raeting.packKinds.pack
+        stack.Pk = raeting.PackKind.pack
         stack.addRemote(RemoteYard(stack=stack,
                                    name=ryn,
                                    lanename=lanename,
@@ -127,7 +127,7 @@ class RAETReqChannel(ReqChannel):
         '''
         return self.send(load, tries, timeout)
 
-    def send(self, load, tries=3, timeout=60):
+    def send(self, load, tries=3, timeout=60, raw=False):
         '''
         Send a message load and wait for a relative reply
         One shot wonder

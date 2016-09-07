@@ -1,25 +1,53 @@
 # -*- coding: utf-8 -*-
 '''
-Manage Windows users with ADSI
+Module for managing Windows Users
 
-Can manage local user accounts or domain accounts (if salt-minion is running as a user w/access
-to AD (or localsystem on a DC), AD accounts should be managed as LDAP objects...
+.. important::
+    If you feel that Salt should be using this module to manage users on a
+    minion, and it is using a different module (or gives an error similar to
+    *'user.info' is not available*), see :ref:`here
+    <module-provider-override>`.
+
+:depends:
+        - pywintypes
+        - win32api
+        - win32net
+        - win32netcon
+        - win32profile
+        - win32security
+        - win32ts
+
+.. note::
+    This currently only works with local user accounts, not domain accounts
 '''
-
 from __future__ import absolute_import
+from datetime import datetime
+import time
 
+try:
+    from shlex import quote as _cmd_quote  # pylint: disable=E0611
+except:  # pylint: disable=W0702
+    from pipes import quote as _cmd_quote
+
+# Import salt libs
 import salt.utils
 from salt.ext.six import string_types
+from salt.exceptions import CommandExecutionError
 import logging
 
 log = logging.getLogger(__name__)
 
 try:
-    import win32netcon
-    import win32security
-    import win32com.client
-    import pythoncom
     import pywintypes
+    import wmi
+    import pythoncom
+    import win32api
+    import win32con
+    import win32net
+    import win32netcon
+    import win32profile
+    import win32security
+    import win32ts
     HAS_WIN32NET_MODS = True
 except ImportError:
     HAS_WIN32NET_MODS = False
@@ -32,186 +60,267 @@ def __virtual__():
     '''
     Set the user module if the kernel is Windows
     '''
-    if HAS_WIN32NET_MODS is True and salt.utils.is_windows():
+    if HAS_WIN32NET_MODS and salt.utils.is_windows():
         return __virtualname__
-    return False
+    return (False, "Module win_useradd: module has failed dependencies or is not on Windows client")
 
 
 def add(name,
         password=None,
         fullname=False,
-        description=False,
-        firstname=False,
-        lastname=False,
-        middleinitial=False,
-        disabled=False,
-        requirepwchange=True,
-        pwneverexpires=False,
-        # Disable pylint checking on the next options. They exist to match the
-        # user modules of other distributions.
-        # pylint: disable=W0613
-        uid=None,
-        gid=None,
+        description=None,
         groups=None,
-        home=False,
-        shell=None,
-        unique=False,
-        system=False,
-        roomnumber=False,
-        workphone=False,
-        homephone=False,
-        loginclass=False,
-        createhome=False
-        # pylint: enable=W0613
-        ):
+        home=None,
+        homedrive=None,
+        profile=None,
+        logonscript=None):
     '''
-    Add a user to the minion
+    Add a user to the minion.
+
+    :param str name:
+        User name
+
+    :param str password:
+        User's password in plain text.
+
+    :param str fullname:
+        The user's full name.
+
+    :param str description:
+        A brief description of the user account.
+
+    :param list groups:
+        A list of groups to add the user to.
+
+    :param str home:
+        The path to the user's home directory.
+
+    :param str homedrive:
+        The drive letter to assign to the home directory. Must be the Drive Letter
+        followed by a colon. ie: U:
+
+    :param str profile:
+        An explicit path to a profile. Can be a UNC or a folder on the system. If
+        left blank, windows uses it's default profile directory.
+
+    :param str logonscript:
+        Path to a login script to run when the user logs on.
+
+    :return:
+        True if successful. False is unsuccessful.
+    :rtype: bool
 
     CLI Example:
 
     .. code-block:: bash
 
         salt '*' user.add name password
-
-        if you want to create on a domain controller, you should use the LDAP DN of the object to create
-        short name will work, but UPN will not get set
-
-        you must use name='cn=user,....' since the DN contains '='
-
-        salt 'domainController' user.add name='cn=user,cn=Users,dc=domain,dc=dom' password='pa$$word'
     '''
-    ret = {'name': name,
-           'result': True,
-           'changes': [],
-           'comment': []}
-
-    if not info(name):
-        if password is not None:
-            pythoncom.CoInitialize()
-            nt = win32com.client.Dispatch('AdsNameSpaces')
-            try:
-                compObj = None
-                addUserName = name
-                ldapProvider = False
-                if 'dc=' in name.lower():
-                    compObj = nt.GetObject('', 'LDAP://' + name[(name.find(',') + 1):len(name)])
-                    addUserName = name[0:(name.find(','))]
-                    ldapProvider = True
-                else:
-                    compObj = nt.GetObject('', 'WinNT://.,computer')
-                if compObj is not None:
-                    newUser = compObj.Create('user', addUserName)
-                    if ldapProvider:
-                        # ldap provider seems to require 'SetInfo' before you can set the password (opposite of WinNT provider)
-                        # also must set the account to 'enabled' as default is disabled
-                        # lots of LDAP properties could be added here/to the function
-                        newUser.sAMAccountName = addUserName.replace('cn=', '').replace('CN=', '')
-                        newUser.userPrincipalName = addUserName.replace('cn=', '').replace(
-                                'CN=', '') + '@' + name[(name.find('dc=') + 3):len(name)].replace(
-                                'dc=', '.').replace(',', '')
-                        newUser.userAccountControl = 544
-                        if fullname:
-                            newUser.FullName = fullname
-                        newUser.SetInfo()
-                        newUser.SetPassword(password)
-                        newUser.userAccountControl = 512
-                        if description:
-                            newUser.Description = description
-                        if firstname:
-                            newUser.givenName = firstname
-                        if lastname:
-                            newUser.sn = lastname
-                        if middleinitial:
-                            newUser.initials = middleinitial
-                        if home:
-                            newUser.homeDirectory = home
-                        newUser.SetInfo()
-                    else:
-                        if fullname:
-                            newUser.Put('FullName', fullname)
-                        if description:
-                            newUser.Put('Description', description)
-                        if home:
-                            newUser.Put('HomeDirectory', home)
-                        newUser.SetPassword(password)
-                        newUser.SetInfo()
-                    ret['changes'].append((
-                            'Successfully created user {0}'
-                            ).format(name))
-                    if disabled:
-                        this_ret = disable(name)
-                        if this_ret['result']:
-                            ret['changes'].append(this_ret['changes'])
-                        else:
-                            ret['comment'].append(this_ret['comment'])
-                    else:
-                        this_ret = enable(name)
-                        if this_ret['result']:
-                            ret['changes'].append(this_ret['changes'])
-                        else:
-                            ret['comment'].append(this_ret['comment'])
-                    if pwneverexpires:
-                        this_ret = passwordneverexpires(name)
-                        if this_ret['result']:
-                            ret['changes'].append(this_ret['changes'])
-                        else:
-                            ret['comment'].append(this_ret['comment'])
-                    else:
-                        this_ret = passwordneverexpires(name, True)
-                        if this_ret['result']:
-                            ret['changes'].append(this_ret['changes'])
-                        else:
-                            ret['comment'].append(this_ret['comment'])
-
-                        if requirepwchange:
-                            this_ret = requirepasswordchange(name)
-                            if this_ret['result']:
-                                ret['changes'].append(this_ret['changes'])
-                            else:
-                                ret['comment'].append(this_ret['comment'])
-                        else:
-                            this_ret = requirepasswordchange(name, True)
-                            if this_ret['result']:
-                                ret['changes'].append(this_ret['changes'])
-                            else:
-                                ret['comment'].append(this_ret['comment'])
-                else:
-                    ret['result'] = False
-                    ret['comment'].append('Unable to obtain ADSI object')
-            except pywintypes.com_error as com_err:
-                ret['result'] = False
-                friendly_error = ''
-                if len(com_err.excepinfo) >= 2:
-                    if com_err.excepinfo[2] is not None:
-                        friendly_error = com_err.excepinfo[2].rstrip('\r\n')
-                ret['comment'].append((
-                        'Failed to create user {0}.  {1}'
-                        ).format(name, friendly_error))
-        else:
-            ret['result'] = False
-            ret['comment'].append((
-                    'A password was not supplied for new user {0}.'
-                    ).format(name))
+    user_info = {}
+    if name:
+        user_info['name'] = name
     else:
-        ret['result'] = None
-        ret['comment'].append((
-                'The user {0} already exists.'
-                ).format(name))
+        return False
+    user_info['password'] = password
+    user_info['priv'] = win32netcon.USER_PRIV_USER
+    user_info['home_dir'] = home
+    user_info['comment'] = description
+    user_info['flags'] = win32netcon.UF_SCRIPT
+    user_info['script_path'] = logonscript
+
+    try:
+        win32net.NetUserAdd(None, 1, user_info)
+    except win32net.error as exc:
+        (number, context, message) = exc
+        log.error('Failed to create user {0}'.format(name))
+        log.error('nbr: {0}'.format(number))
+        log.error('ctx: {0}'.format(context))
+        log.error('msg: {0}'.format(message))
+        return False
+
+    update(name=name,
+           homedrive=homedrive,
+           profile=profile,
+           fullname=fullname)
+
+    ret = chgroups(name, groups) if groups else True
 
     return ret
 
 
+def update(name,
+           password=None,
+           fullname=None,
+           description=None,
+           home=None,
+           homedrive=None,
+           logonscript=None,
+           profile=None,
+           expiration_date=None,
+           expired=None,
+           account_disabled=None,
+           unlock_account=None,
+           password_never_expires=None,
+           disallow_change_password=None):
+    r'''
+    Updates settings for the windows user. Name is the only required parameter.
+    Settings will only be changed if the parameter is passed a value.
+
+    .. versionadded:: 2015.8.0
+
+    :param str name:
+        The user name to update.
+
+    :param str password:
+        New user password in plain text.
+
+    :param str fullname:
+        The user's full name.
+
+    :param str description:
+        A brief description of the user account.
+
+    :param str home:
+        The path to the user's home directory.
+
+    :param str homedrive:
+        The drive letter to assign to the home directory. Must be the Drive Letter
+        followed by a colon. ie: U:
+
+    :param str logonscript:
+        The path to the logon script.
+
+    :param str profile:
+        The path to the user's profile directory.
+
+    :param date expiration_date: The date and time when the account expires. Can
+        be a valid date/time string. To set to never expire pass the string 'Never'.
+
+    :param bool expired: Pass `True` to expire the account. The user will be
+        prompted to change their password at the next logon. Pass `False` to mark
+        the account as 'not expired'. You can't use this to negate the expiration if
+        the expiration was caused by the account expiring. You'll have to change
+        the `expiration_date` as well.
+
+    :param bool account_disabled: True disables the account. False enables the
+        account.
+
+    :param bool unlock_account: True unlocks a locked user account. False is
+        ignored.
+
+    :param bool password_never_expires: True sets the password to never expire.
+        False allows the password to expire.
+
+    :param bool disallow_change_password: True blocks the user from changing
+        the password. False allows the user to change the password.
+
+    :return: True if successful. False is unsuccessful.
+
+    :rtype: bool
+
+    CLI Example:
+
+    .. code-block:: bash
+
+        salt '*' user.update bob password=secret profile=C:\Users\Bob
+                 home=\\server\homeshare\bob homedrive=U:
+    '''
+
+    # Make sure the user exists
+    # Return an object containing current settings for the user
+    try:
+        user_info = win32net.NetUserGetInfo(None, name, 4)
+    except win32net.error as exc:
+        (number, context, message) = exc
+        log.error('Failed to update user {0}'.format(name))
+        log.error('nbr: {0}'.format(number))
+        log.error('ctx: {0}'.format(context))
+        log.error('msg: {0}'.format(message))
+        return False
+
+    # Check parameters to update
+    # Update the user object with new settings
+    if password:
+        user_info['password'] = password
+    if home:
+        user_info['home_dir'] = home
+    if homedrive:
+        user_info['home_dir_drive'] = homedrive
+    if description:
+        user_info['comment'] = description
+    if logonscript:
+        user_info['script_path'] = logonscript
+    if fullname:
+        user_info['full_name'] = fullname
+    if profile:
+        user_info['profile'] = profile
+    if expiration_date:
+        if expiration_date == 'Never':
+            user_info['acct_expires'] = win32netcon.TIMEQ_FOREVER
+        else:
+            try:
+                dt_obj = salt.utils.date_cast(expiration_date)
+            except (ValueError, RuntimeError):
+                return 'Invalid Date/Time Format: {0}'.format(expiration_date)
+            user_info['acct_expires'] = time.mktime(dt_obj.timetuple())
+    if expired is not None:
+        if expired:
+            user_info['password_expired'] = 1
+        else:
+            user_info['password_expired'] = 0
+    if account_disabled is not None:
+        if account_disabled:
+            user_info['flags'] |= win32netcon.UF_ACCOUNTDISABLE
+        else:
+            user_info['flags'] ^= win32netcon.UF_ACCOUNTDISABLE
+    if unlock_account is not None:
+        if unlock_account:
+            user_info['flags'] ^= win32netcon.UF_LOCKOUT
+    if password_never_expires is not None:
+        if password_never_expires:
+            user_info['flags'] |= win32netcon.UF_DONT_EXPIRE_PASSWD
+        else:
+            user_info['flags'] ^= win32netcon.UF_DONT_EXPIRE_PASSWD
+    if disallow_change_password is not None:
+        if disallow_change_password:
+            user_info['flags'] |= win32netcon.UF_PASSWD_CANT_CHANGE
+        else:
+            user_info['flags'] ^= win32netcon.UF_PASSWD_CANT_CHANGE
+
+    # Apply new settings
+    try:
+        win32net.NetUserSetInfo(None, name, 4, user_info)
+    except win32net.error as exc:
+        (number, context, message) = exc
+        log.error('Failed to update user {0}'.format(name))
+        log.error('nbr: {0}'.format(number))
+        log.error('ctx: {0}'.format(context))
+        log.error('msg: {0}'.format(message))
+        return False
+
+    return True
+
+
 def delete(name,
-           # Disable pylint checking on the next options. They exist to match
-           # the user modules of other distributions.
-           # pylint: disable=W0613
            purge=False,
-           force=False
-           # pylint: enable=W0613
-           ):
+           force=False):
     '''
     Remove a user from the minion
-    NOTE: purge and force have not been implemented on Windows yet
+
+    :param str name:
+        The name of the user to delete
+
+    :param bool purge:
+        Boolean value indicating that the user profile should also be removed when
+        the user account is deleted. If set to True the profile will be removed.
+
+    :param bool force:
+        Boolean value indicating that the user account should be deleted even if the
+        user is logged in. True will log the user out and delete user.
+
+    :return:
+        True if successful
+    :rtype: bool
 
     CLI Example:
 
@@ -219,404 +328,285 @@ def delete(name,
 
         salt '*' user.delete name
     '''
-    ret = {'name': name,
-           'result': True,
-           'changes': [],
-           'comment': ''}
+    # Check if the user exists
+    try:
+        user_info = win32net.NetUserGetInfo(None, name, 4)
+    except win32net.error as exc:
+        (number, context, message) = exc
+        log.error('User not found: {0}'.format(name))
+        log.error('nbr: {0}'.format(number))
+        log.error('ctx: {0}'.format(context))
+        log.error('msg: {0}'.format(message))
+        return False
 
-    if info(name):
-        pythoncom.CoInitialize()
-        nt = win32com.client.Dispatch('AdsNameSpaces')
+    # Check if the user is logged in
+    # Return a list of logged in users
+    try:
+        sess_list = win32ts.WTSEnumerateSessions()
+    except win32ts.error as exc:
+        (number, context, message) = exc
+        log.error('No logged in users found')
+        log.error('nbr: {0}'.format(number))
+        log.error('ctx: {0}'.format(context))
+        log.error('msg: {0}'.format(message))
+
+    # Is the user one that is logged in
+    logged_in = False
+    session_id = None
+    for sess in sess_list:
+        if win32ts.WTSQuerySessionInformation(None, sess['SessionId'], win32ts.WTSUserName) == name:
+            session_id = sess['SessionId']
+            logged_in = True
+
+    # If logged in and set to force, log the user out and continue
+    # If logged in and not set to force, return false
+    if logged_in:
+        if force:
+            try:
+                win32ts.WTSLogoffSession(win32ts.WTS_CURRENT_SERVER_HANDLE, session_id, True)
+            except win32ts.error as exc:
+                (number, context, message) = exc
+                log.error('User not found: {0}'.format(name))
+                log.error('nbr: {0}'.format(number))
+                log.error('ctx: {0}'.format(context))
+                log.error('msg: {0}'.format(message))
+                return False
+        else:
+            log.error('User {0} is currently logged in.'.format(name))
+            return False
+
+    # Remove the User Profile directory
+    if purge:
         try:
-            deleteUserName = name
-            compObj = None
-            if 'dc=' in name.lower():
-                compObj = nt.GetObject('', 'LDAP://' + name[(name.find(',') + 1):len(name)])
-                deleteUserName = name[0:(name.find(','))]
+            sid = getUserSid(name)
+            win32profile.DeleteProfile(sid)
+        except pywintypes.error as exc:
+            (number, context, message) = exc
+            if number == 2:  # Profile Folder Not Found
+                pass
             else:
-                compObj = nt.GetObject('', 'WinNT://.,computer')
-                if '\\' in deleteUserName:
-                    deleteUserName = deleteUserName.split('\\')[1]
-            if compObj is not None:
-                compObj.Delete('user', deleteUserName)
-                ret['changes'].append(('Successfully removed user {0}').format(name))
-            else:
-                ret['result'] = False
-                ret['comment'] = ('Unable to obtain ADSI object')
-        except pywintypes.com_error as com_err:
-            ret['result'] = False
-            if len(com_err.excepinfo) >= 2:
-                if com_err.excepinfo[2] is not None:
-                    friendly_error = com_err.excepinfo[2].rstrip('\r\n')
-            ret['comment'] = (
-                    'Failed to remove user {0}.  {1}'
-                    ).format(name, friendly_error)
-    else:
-        ret['result'] = None
-        ret['comment'] = (
-                'The user {0} does not exists.'
-                ).format(name)
+                log.error('Failed to remove profile for {0}'.format(name))
+                log.error('nbr: {0}'.format(number))
+                log.error('ctx: {0}'.format(context))
+                log.error('msg: {0}'.format(message))
+                return False
 
-    return ret
-
-
-def enable(name):
-    '''
-    enable a user account
-
-    salt '*' user.enable foo
-    '''
-    ret = disable(name, False)
-    return ret
-
-
-def disable(name, disabled=True):
-    '''
-    disable a user account
-
-    salt '*' disableuser foo
-
-    to enable a user:
-
-    salt '*' disableuser foot False
-    '''
-    ret = {'name': name,
-           'result': True,
-           'changes': '',
-           'comment': ''}
-    pythoncom.CoInitialize()
-    nt = win32com.client.Dispatch('AdsNameSpaces')
-    if disabled:
-        accountstatus = 'disabled'
-    else:
-        accountstatus = 'enabled'
+    # And finally remove the user account
     try:
-        if 'dc=' in name.lower():
-            userObj = nt.GetObject('', 'LDAP://' + name)
+        win32net.NetUserDel(None, name)
+    except win32net.error as exc:
+        (number, context, message) = exc
+        log.error('Failed to delete user {0}'.format(name))
+        log.error('nbr: {0}'.format(number))
+        log.error('ctx: {0}'.format(context))
+        log.error('msg: {0}'.format(message))
+        return False
 
-        else:
-            userObj = nt.GetObject('', 'WinNT://./' + name + ',user')
-
-        userObj.AccountDisabled = disabled
-        userObj.SetInfo()
-        ret['result'] = True
-        ret['changes'] = (
-                'User {0} is now {1}.'
-                ).format(name, accountstatus)
-    except pywintypes.com_error as com_err:
-        ret['result'] = False
-        friendly_error = ''
-        if len(com_err.excepinfo) >= 2:
-            if com_err.excepinfo[2] is not None:
-                friendly_error = com_err.excepinfo[2].rstrip('\r\n')
-        ret['comment'] = (
-                'Failed to set password for user {0}.  {1} - {2}'
-                ).format(name, friendly_error, com_err)
-    return ret
+    return True
 
 
-def passwordneverexpires(name, clear=False):
+def getUserSid(username):
     '''
-    set a user's password to never expire
+    Get the Security ID for the user
 
-    salt '*' user.passwordneverexpires foo
+    :param str username:
+        user name for which to look up the SID
 
-    to clear the password never expires setting (i.e. set it to expire), use clear=True
+    :return:
+        Returns the user SID
+    :rtype: str
 
-    salt '*' user.passwordneverexpires foo True
-    '''
-    ret = {'name': name,
-           'result': True,
-           'changes': '',
-           'comment': ''}
-    pythoncom.CoInitialize()
-    nt = win32com.client.Dispatch('AdsNameSpaces')
-    if clear:
-        expirestatus = 'expire'
-    else:
-        expirestatus = 'never expire'
-    try:
-        if 'dc=' in name.lower():
-            userObj = nt.GetObject('', 'LDAP://' + name)
-            if clear:
-                if bool(userObj.userAccountControl & win32netcon.UF_DONT_EXPIRE_PASSWD):
-                    userObj.userAccountControl = userObj.userAccountControl ^ win32netcon.UF_DONT_EXPIRE_PASSWD
-            else:
-                userObj.userAccountControl = userObj.userAccountControl | win32netcon.UF_DONT_EXPIRE_PASSWD
-        else:
-            userObj = nt.GetObject('', 'WinNT://./' + name + ',user')
-            if clear:
-                if bool(userObj.UserFlags & win32netcon.UF_DONT_EXPIRE_PASSWD):
-                    userObj.Put('UserFlags', userObj.UserFlags ^ win32netcon.UF_DONT_EXPIRE_PASSWD)
-            else:
-                userObj.Put('UserFlags', userObj.UserFlags | win32netcon.UF_DONT_EXPIRE_PASSWD)
-        userObj.SetInfo()
-        ret['result'] = True
-        ret['changes'] = (
-                'Password for user {0} is now set to {1}.'
-                ).format(name, expirestatus)
-    except pywintypes.com_error as com_err:
-        ret['result'] = False
-        friendly_error = ''
-        if len(com_err.excepinfo) >= 2:
-            if com_err.excepinfo[2] is not None:
-                friendly_error = com_err.excepinfo[2].rstrip('\r\n')
-        ret['comment'] = (
-                'Failed to set password for user {0}.  {1} - {2}'
-                ).format(name, friendly_error, com_err)
-
-    return ret
-
-
-def requirepasswordchange(name, clear=False):
-    '''
-    expire a user's password (i.e. require it to change on next logon)
-    if the password is set to "never expire" this has no effect
-
-    salt '*' user.requirepasswordchange foo
-
-    to clear the require password change flag, use clear=True
-
-    salt '*' user.requirepasswordchange foo True
-    '''
-    ret = {'name': name,
-           'result': True,
-           'changes': '',
-           'comment': ''}
-    pythoncom.CoInitialize()
-    nt = win32com.client.Dispatch('AdsNameSpaces')
-    if clear:
-        expiredstatus = 'cleared'
-    else:
-        expiredstatus = 'set'
-    try:
-        if 'dc=' in name.lower():
-            userObj = nt.GetObject('', 'LDAP://' + name)
-            if clear:
-                userObj.pwdLastSet = -1
-            else:
-                userObj.pwdLastSet = 0
-        else:
-            userObj = nt.GetObject('', 'WinNT://./' + name + ',user')
-            if clear:
-                userObj.Put('PasswordExpired', 0)
-            else:
-                userObj.Put('PasswordExpired', 1)
-        userObj.SetInfo()
-        ret['result'] = True
-        ret['changes'] = (
-                'Password must be changed at next logon for {0} is now {1}.'
-                ).format(name, expiredstatus)
-    except pywintypes.com_error as com_err:
-        ret['result'] = False
-        friendly_error = ''
-        if len(com_err.excepinfo) >= 2:
-            if com_err.excepinfo[2] is not None:
-                friendly_error = com_err.excepinfo[2].rstrip('\r\n')
-        ret['comment'] = (
-                'Failed to set password for user {0}.  {1} - {2}'
-                ).format(name, friendly_error, com_err)
-
-    return ret
-
-
-def setpassword(name, password, mustchange=None, neverexpires=None):
-    '''
-    Set a user's password
-
-    use 'mustchange' and 'neverexpires' to set those user account attributes, by default they will be left alone (None)
-        setting to 'False' will clear them, setting to 'True' will set them
     CLI Example:
 
     .. code-block:: bash
 
-        salt '*' user.setpassword name password
+        salt '*' user.getUserSid jsnuffy
     '''
-    ret = {'name': name,
-           'result': True,
-           'changes': [],
-           'comment': ''}
+    domain = win32api.GetComputerName()
+    if username.find(u'\\') != -1:
+        domain = username.split(u'\\')[0]
+        username = username.split(u'\\')[-1]
+    domain = domain.upper()
+    return win32security.ConvertSidToStringSid(win32security.LookupAccountName(None, domain + u'\\' + username)[0])
 
-    if info(name):
-        pythoncom.CoInitialize()
-        nt = win32com.client.Dispatch('AdsNameSpaces')
-        try:
-            userObj = None
-            if 'dc=' in name.lower():
-                userObj = nt.GetObject('', 'LDAP://' + name)
-            else:
-                userObj = nt.GetObject('', 'WinNT://./' + name + ',user')
-            if userObj is not None:
-                userObj.SetPassword(password)
-                ret['changes'].append((
-                        'Successfully set password for user {0}'
-                        ).format(name))
-                if mustchange is not None:
-                    if mustchange:
-                        temp_ret = requirepasswordchange(name)
-                        ret['changes'].append(temp_ret['changes'])
-                    else:
-                        temp_ret = requirepasswordchange(name, True)
-                        ret['changes'].append(temp_ret['changes'])
-                if neverexpires is not None:
-                    if neverexpires:
-                        temp_ret = passwordneverexpires(name)
-                        ret['changes'].append(temp_ret['changes'])
-                    else:
-                        temp_ret = passwordneverexpires(name, True)
-                        ret['changes'].append(temp_ret['changes'])
-            else:
-                ret['result'] = False
-                ret['comment'] = ('Unable to obtain ADSI user object')
-        except pywintypes.com_error as com_err:
-            ret['result'] = False
-            friendly_error = ''
-            if len(com_err.excepinfo) >= 2:
-                if com_err.excepinfo[2] is not None:
-                    friendly_error = com_err.excepinfo[2].rstrip('\r\n')
-            ret['comment'] = (
-                    'Failed to set password for user {0}.  {1}'
-                    ).format(name, friendly_error)
-    else:
-        ret['result'] = None
-        ret['comment'] = (
-                'The user {0} does not exists.'
-                ).format(name)
 
-    return ret
+def setpassword(name, password):
+    '''
+    Set the user's password
+
+    :param str name:
+        user name for which to set the password
+
+    :param str password:
+        the new password
+
+    :return:
+        True if successful. False is unsuccessful.
+    :rtype: bool
+
+    CLI Example:
+
+    .. code-block:: bash
+
+        salt '*' user.setpassword jsnuffy sup3rs3cr3t
+    '''
+    return update(name=name, password=password)
 
 
 def addgroup(name, group):
     '''
     Add user to a group
 
+    :param str name:
+        user name to add to the group
+
+    :param str group:
+        name of the group to which to add the user
+
+    :return:
+        True if successful. False is unsuccessful.
+    :rtype: bool
+
     CLI Example:
 
     .. code-block:: bash
 
-        salt '*' user.addgroup username groupname
+        salt '*' user.addgroup jsnuffy 'Power Users'
     '''
-    ret = __salt__['group.adduser'](group, name)
-    return ret
+    name = _cmd_quote(name)
+    group = _cmd_quote(group).lstrip('\'').rstrip('\'')
+
+    user = info(name)
+    if not user:
+        return False
+    if group in user['groups']:
+        return True
+
+    cmd = 'net localgroup "{0}" {1} /add'.format(group, name)
+    ret = __salt__['cmd.run_all'](cmd, python_shell=True)
+
+    return ret['retcode'] == 0
 
 
 def removegroup(name, group):
     '''
     Remove user from a group
 
-    CLI Example:
+    :param str name:
+        user name to remove from the group
 
-    .. code-block:: bash
+    :param str group:
+        name of the group from which to remove the user
 
-        salt '*' user.removegroup username groupname
-    '''
-    ret = __salt__['group.deluser'](group, name)
-    return ret
-
-
-def chhome(name, home):
-    '''
-    Change the home directory of the user
+    :return:
+        True if successful. False is unsuccessful.
+    :rtype: bool
 
     CLI Example:
 
     .. code-block:: bash
 
-        salt '*' user.chhome foo \\\\fileserver\\home\\foo
+        salt '*' user.removegroup jsnuffy 'Power Users'
     '''
-    ret = {'name': name,
-           'result': True,
-           'changes': [],
-           'comment': ''}
+    name = _cmd_quote(name)
+    group = _cmd_quote(group).lstrip('\'').rstrip('\'')
 
-    current_info = info(name)
-    pythoncom.CoInitialize()
-    nt = win32com.client.Dispatch('AdsNameSpaces')
+    user = info(name)
 
-    if current_info:
-        try:
-            if "dc=" in name.lower():
-                userObj = nt.GetObject('', 'LDAP://' + name)
-                userObj.HomeDirectory = home
-                userObj.SetInfo()
-            else:
-                userObj = nt.GetObject('', 'WinNT://./' + name + ',user')
-                userObj.Put('HomeDirectory', home)
-                userObj.SetInfo()
-            ret['result'] = True
-            ret['changes'] = (
-                    'Successfully changed user {0}\'s home directory from "{1}" to "{2}"'
-                    ).format(name, current_info['home'], home)
-        except pywintypes.com_error as com_err:
-            ret['result'] = False
-            if len(com_err.excepinfo) >= 2:
-                if com_err.excepinfo[2] is not None:
-                    friendly_error = com_err.excepinfo[2].rstrip('\r\n')
-            ret['comment'] = (
-                    'Failed to set home directory for user {0}.  {1}'
-                    ).format(name, friendly_error)
-    else:
-        ret['result'] = False
-        ret['comment'] = (
-                'The user {0} does not appear to exist.'
-                ).format(name)
-    return ret
+    if not user:
+        return False
+
+    if group not in user['groups']:
+        return True
+
+    cmd = 'net localgroup "{0}" {1} /delete'.format(group, name)
+    ret = __salt__['cmd.run_all'](cmd, python_shell=True)
+
+    return ret['retcode'] == 0
+
+
+def chhome(name, home, **kwargs):
+    '''
+    Change the home directory of the user, pass True for persist to move files
+    to the new home directory if the old home directory exist.
+
+    :param str name:
+        name of the user whose home directory you wish to change
+
+    :param str home:
+        new location of the home directory
+
+    :return:
+        True if successful. False is unsuccessful.
+    :rtype: bool
+
+    CLI Example:
+
+    .. code-block:: bash
+
+        salt '*' user.chhome foo \\\\fileserver\\home\\foo True
+    '''
+    kwargs = salt.utils.clean_kwargs(**kwargs)
+    persist = kwargs.pop('persist', False)
+    if kwargs:
+        salt.utils.invalid_kwargs(kwargs)
+    if persist:
+        log.info('Ignoring unsupported \'persist\' argument to user.chhome')
+
+    pre_info = info(name)
+
+    if not pre_info:
+        return False
+
+    if home == pre_info['home']:
+        return True
+
+    if not update(name=name, home=home):
+        return False
+
+    post_info = info(name)
+    if post_info['home'] != pre_info['home']:
+        return post_info['home'] == home
+
+    return False
 
 
 def chprofile(name, profile):
     '''
     Change the profile directory of the user
 
+    :param str name:
+        name of the user whose profile you wish to change
+
+    :param str profile:
+        new location of the profile
+
+    :return: True if successful. False is unsuccessful.
+
+    :rtype: bool
+
     CLI Example:
 
     .. code-block:: bash
 
         salt '*' user.chprofile foo \\\\fileserver\\profiles\\foo
-
     '''
-    ret = {'name': name,
-           'result': True,
-           'changes': [],
-           'comment': ''}
-
-    current_info = info(name)
-    pythoncom.CoInitialize()
-    nt = win32com.client.Dispatch('AdsNameSpaces')
-
-    if current_info:
-        try:
-            if "dc=" in name.lower():
-                userObj = nt.GetObject('', 'LDAP://' + name)
-                userObj.profilePath = profile
-                userObj.SetInfo()
-            else:
-                userObj = nt.GetObject('', 'WinNT://./' + name + ',user')
-                userObj.Put('profile', profile)
-                userObj.SetInfo()
-            ret['result'] = True
-            ret['changes'] = (
-                    'Successfully changed user {0}\'s profile directory from "{1}" to "{2}"'
-                    ).format(name, current_info['profile'], profile)
-        except pywintypes.com_error as com_err:
-            ret['result'] = False
-            friendly_error = ''
-            if len(com_err.excepinfo) >= 2:
-                if com_err.excepinfo[2] is not None:
-                    friendly_error = com_err.excepinfo[2].rstrip('\r\n')
-            ret['comment'] = (
-                    'Failed to set profile path for user {0}.  {1}'
-                    ).format(name, friendly_error)
-    else:
-        ret['result'] = False
-        ret['comment'] = (
-                'The user {0} does not appear to exist.'
-                ).format(name)
-    return ret
+    return update(name=name, profile=profile)
 
 
 def chfullname(name, fullname):
     '''
     Change the full name of the user
+
+    :param str name:
+        user name for which to change the full name
+
+    :param str fullname:
+        the new value for the full name
+
+    :return:
+        True if successful. False is unsuccessful.
+    :rtype: bool
 
     CLI Example:
 
@@ -624,190 +614,168 @@ def chfullname(name, fullname):
 
         salt '*' user.chfullname user 'First Last'
     '''
-    ret = {'name': name,
-           'result': True,
-           'changes': [],
-           'comment': ''}
-
-    current_info = info(name)
-    pythoncom.CoInitialize()
-    nt = win32com.client.Dispatch('AdsNameSpaces')
-
-    if current_info:
-        try:
-            if "dc=" in name.lower():
-                userObj = nt.GetObject('', 'LDAP://' + name)
-                userObj.FullName = fullname
-                userObj.SetInfo()
-            else:
-                userObj = nt.GetObject('', 'WinNT://./' + name + ',user')
-                userObj.Put('FullName', fullname)
-                userObj.SetInfo()
-            ret['result'] = True
-            ret['changes'] = (
-                    'Successfully changed user {0}\'s full name from "{1}" to "{2}"'
-                    ).format(name, current_info['fullname'], fullname)
-        except pywintypes.com_error as com_err:
-            ret['result'] = False
-            if len(com_err.excepinfo) >= 2:
-                if com_err.excepinfo[2] is not None:
-                    friendly_error = com_err.excepinfo[2].rstrip('\r\n')
-            ret['comment'] = (
-                    'Failed to change the full name for user {0}.  {1}'
-                    ).format(name, friendly_error)
-    else:
-        ret['result'] = False
-        ret['comment'] = (
-                'The user {0} does not appear to exist.'
-                ).format(name)
-    return ret
+    return update(name=name, fullname=fullname)
 
 
-def chgroups(name, groups, append=False):
+def chgroups(name, groups, append=True):
     '''
-    Change the groups this user belongs to, add append to append the specified
-    groups
+    Change the groups this user belongs to, add append=False to make the user a
+    member of only the specified groups
+
+    :param str name:
+        user name for which to change groups
+
+    :param groups:
+        a single group or a list of groups to assign to the user
+    :type groups: list, str
+
+    :param bool append:
+        True adds the passed groups to the user's current groups
+        False sets the user's groups to the passed groups only
+
+    :return:
+        True if successful. False is unsuccessful.
+    :rtype: bool
 
     CLI Example:
 
     .. code-block:: bash
 
-        salt '*' user.chgroups foo wheel,root True
-
-        if using DNs, group names must be separated with ', '
+        salt '*' user.chgroups jsnuffy Administrators,Users True
     '''
-    ret = {'name': name,
-           'result': True,
-           'changes': {'Groups Added': [], 'Groups Removed': []},
-           'comment': []}
-
-    current_info = info(name)
     if isinstance(groups, string_types):
-        if 'dc=' in groups.lower():
-            groups = groups.split(", ")
-        else:
-            groups = groups.split(',')
-    groups = [_fixlocaluser(x.strip(' *')) for x in groups]
-    groups.sort()
-    current_info['groups'].sort()
+        groups = groups.split(',')
 
-    if current_info:
-        if [x.lower() for x in groups] == [x.lower() for x in current_info['groups']]:
-            # nothing done
-            ret['result'] = None
-            ret['changes'] = None
-            ret['comment'].append((
-                    '{0}\'s group membership is correct.'
-                    ).format(name))
-        else:
-            if append:
-                for group in groups:
-                    if group.lower() not in [x.lower() for x in current_info['groups']]:
-                        thisRet = addgroup(name, group)
-                        if thisRet['result']:
-                            ret['changes']['Groups Added'].append(group)
-                        else:
-                            ret['result'] = False
-                            ret['comment'].append(thisRet['comment'])
-                            return ret
-            else:
-                for group in current_info['groups']:
-                    if group.lower() not in [x.lower() for x in groups]:
-                        # remove it
-                        thisRet = removegroup(name, group)
-                        if thisRet['result']:
-                            ret['changes']['Groups Removed'].append(group)
-                        else:
-                            ret['result'] = False
-                            ret['comment'].append(thisRet['comment'])
-                            return ret
-                for group in groups:
-                    if group.lower() not in [x.lower() for x in current_info['groups']]:
-                        # add it
-                        thisRet = addgroup(name, group)
-                        if thisRet['result']:
-                            ret['changes']['Groups Added'].append(group)
-                        else:
-                            ret['result'] = False
-                            ret['comment'].append(thisRet['comment'])
-                            return ret
+    groups = [x.strip(' *') for x in groups]
+    ugrps = set(list_groups(name))
+    if ugrps == set(groups):
+        return True
 
-            ret['result'] = True
-    else:
-        ret['result'] = False
-        ret['comment'].append((
-                'The user {0} does not appear to exist.'
-                ).format(name))
-    return ret
+    name = _cmd_quote(name)
+
+    if not append:
+        for group in ugrps:
+            group = _cmd_quote(group).lstrip('\'').rstrip('\'')
+            if group not in groups:
+                cmd = 'net localgroup "{0}" {1} /delete'.format(group, name)
+                __salt__['cmd.run_all'](cmd, python_shell=True)
+
+    for group in groups:
+        if group in ugrps:
+            continue
+        group = _cmd_quote(group).lstrip('\'').rstrip('\'')
+        cmd = 'net localgroup "{0}" {1} /add'.format(group, name)
+        __salt__['cmd.run_all'](cmd, python_shell=True)
+
+    agrps = set(list_groups(name))
+    return len(ugrps - agrps) == 0
 
 
 def info(name):
     '''
     Return user information
 
+    :param str name:
+        Username for which to display information
+
+    :returns:
+        A dictionary containing user information
+            - fullname
+            - username
+            - SID
+            - passwd (will always return None)
+            - comment (same as description, left here for backwards compatibility)
+            - description
+            - active
+            - logonscript
+            - profile
+            - home
+            - homedrive
+            - groups
+            - password_changed
+            - successful_logon_attempts
+            - failed_logon_attempts
+            - last_logon
+            - account_disabled
+            - account_locked
+            - password_never_expires
+            - disallow_change_password
+            - gid
+    :rtype: dict
+
     CLI Example:
 
     .. code-block:: bash
 
-        salt '*' user.info root
+        salt '*' user.info jsnuffy
     '''
-    pythoncom.CoInitialize()
-    nt = win32com.client.Dispatch('AdsNameSpaces')
-
-    ret = {'name': '',
-            'fullname': '',
-            'uid': '',
-            'comment': '',
-            'active': '',
-            'logonscript': '',
-            'profile': '',
-            'home': '',
-            'groups': '',
-            'gid': ''}
+    ret = {}
+    items = {}
     try:
-        if 'dc=' in name.lower():
-            userObj = nt.GetObject('', 'LDAP://' + name)
-            ret['active'] = (not bool(userObj.userAccountControl & win32netcon.UF_ACCOUNTDISABLE))
-            ret['logonscript'] = userObj.scriptPath
-            ret['profile'] = userObj.profilePath
-            ret['fullname'] = userObj.DisplayName
-            ret['name'] = userObj.sAMAccountName
+        items = win32net.NetUserGetInfo(None, name, 4)
+    except win32net.error:
+        pass
+
+    if items:
+        groups = []
+        try:
+            groups = win32net.NetUserGetLocalGroups(None, name)
+        except win32net.error:
+            pass
+
+        ret['fullname'] = items['full_name']
+        ret['name'] = items['name']
+        ret['uid'] = win32security.ConvertSidToStringSid(items['user_sid'])
+        ret['passwd'] = items['password']
+        ret['comment'] = items['comment']
+        ret['description'] = items['comment']
+        ret['active'] = (not bool(items['flags'] & win32netcon.UF_ACCOUNTDISABLE))
+        ret['logonscript'] = items['script_path']
+        ret['profile'] = items['profile']
+        ret['failed_logon_attempts'] = items['bad_pw_count']
+        ret['successful_logon_attempts'] = items['num_logons']
+        secs = time.mktime(datetime.now().timetuple()) - items['password_age']
+        ret['password_changed'] = datetime.fromtimestamp(secs). \
+            strftime('%Y-%m-%d %H:%M:%S')
+        if items['last_logon'] == 0:
+            ret['last_logon'] = 'Never'
         else:
-            if '\\' in name:
-                name = name.split('\\')[1]
-            userObj = nt.GetObject('', 'WinNT://./' + name + ',user')
-            ret['logonscript'] = userObj.LoginScript
-            ret['active'] = (not userObj.AccountDisabled)
-            ret['fullname'] = userObj.FullName
-            ret['name'] = userObj.Name
-            if not userObj.Profile:
-                regProfile = _get_userprofile_from_registry(
-                        name, win32security.ConvertSidToStringSid(
-                        pywintypes.SID(userObj.objectSID)))
-                if regProfile:
-                    ret['profile'] = regProfile
-            else:
-                ret['profile'] = userObj.Profile
+            ret['last_logon'] = datetime.fromtimestamp(items['last_logon']).\
+                strftime('%Y-%m-%d %H:%M:%S')
+        ret['expiration_date'] = datetime.fromtimestamp(items['acct_expires']).\
+            strftime('%Y-%m-%d %H:%M:%S')
+        ret['expired'] = items['password_expired'] == 1
+        if not ret['profile']:
+            ret['profile'] = _get_userprofile_from_registry(name, ret['uid'])
+        ret['home'] = items['home_dir']
+        ret['homedrive'] = items['home_dir_drive']
+        if not ret['home']:
+            ret['home'] = ret['profile']
+        ret['groups'] = groups
+        if items['flags'] & win32netcon.UF_DONT_EXPIRE_PASSWD == 0:
+            ret['password_never_expires'] = False
+        else:
+            ret['password_never_expires'] = True
+        if items['flags'] & win32netcon.UF_ACCOUNTDISABLE == 0:
+            ret['account_disabled'] = False
+        else:
+            ret['account_disabled'] = True
+        if items['flags'] & win32netcon.UF_LOCKOUT == 0:
+            ret['account_locked'] = False
+        else:
+            ret['account_locked'] = True
+        if items['flags'] & win32netcon.UF_PASSWD_CANT_CHANGE == 0:
+            ret['disallow_change_password'] = False
+        else:
+            ret['disallow_change_password'] = True
 
-        gr_mem = []
+        ret['gid'] = ''
 
-        for group in userObj.groups():
-            if 'winnt' in group.ADSPath.lower():
-                gr_mem.append(
-                        _getnetbiosusernamefromsid(group.ADSPath))
-            else:
-                gr_mem.append(
-                        group.distinguishedName)
-        ret['groups'] = gr_mem
+        return ret
 
-        ret['uid'] = win32security.ConvertSidToStringSid(pywintypes.SID(userObj.objectSID))
-        ret['comment'] = userObj.description
-        ret['home'] = userObj.homeDirectory
-        ret['gid'] = userObj.primaryGroupID
-    except pywintypes.com_error:
+    else:
+
         return False
-
-    return ret
 
 
 def _get_userprofile_from_registry(user, sid):
@@ -815,11 +783,12 @@ def _get_userprofile_from_registry(user, sid):
     In case net user doesn't return the userprofile
     we can get it from the registry
     '''
-    profile_dir = __salt__['reg.read_key'](
-        'HKEY_LOCAL_MACHINE', 'SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion\\ProfileList\\{0}'.format(sid),
+    profile_dir = __salt__['reg.read_value'](
+        'HKEY_LOCAL_MACHINE',
+        u'SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion\\ProfileList\\{0}'.format(sid),
         'ProfileImagePath'
-    )
-    log.debug('user {0} with sid={2} profile is located at "{1}"'.format(user, profile_dir, sid))
+    )['vdata']
+    log.debug(u'user {0} with sid={2} profile is located at "{1}"'.format(user, profile_dir, sid))
     return profile_dir
 
 
@@ -827,23 +796,41 @@ def list_groups(name):
     '''
     Return a list of groups the named user belongs to
 
+    :param str name:
+        user name for which to list groups
+
+    :return:
+        list of groups to which the user belongs
+    :rtype: list
+
     CLI Example:
 
     .. code-block:: bash
 
         salt '*' user.list_groups foo
     '''
-
-    user = info(name)
-    if user:
-        return sorted(user['groups'])
-    else:
+    ugrp = set()
+    try:
+        user = info(name)['groups']
+    except KeyError:
         return False
+    for group in user:
+        ugrp.add(group.strip(' *'))
+
+    return sorted(list(ugrp))
 
 
 def getent(refresh=False):
     '''
     Return the list of all info for all users
+
+    :param bool refresh:
+        Refresh the cached user information. Default is False. Useful when used from
+        within a state function.
+
+    :return:
+        A dictionary containing information about all users on the system
+    :rtype: dict
 
     CLI Example:
 
@@ -856,150 +843,166 @@ def getent(refresh=False):
 
     ret = []
     for user in __salt__['user.list_users']():
+        stuff = {}
         user_info = __salt__['user.info'](user)
-        ret.append(user_info)
+
+        stuff['gid'] = ''
+        stuff['groups'] = user_info['groups']
+        stuff['home'] = user_info['home']
+        stuff['name'] = user_info['name']
+        stuff['passwd'] = user_info['passwd']
+        stuff['shell'] = ''
+        stuff['uid'] = user_info['uid']
+
+        ret.append(stuff)
+
     __context__['user.getent'] = ret
     return ret
 
 
-def list_users(useldap=False):
+def list_users():
     '''
     Return a list of users on Windows
+
+    :return:
+        list of users on the system
+    :rtype: list
+
+    CLI Example:
+
+    .. code-block:: bash
+
+        salt '*' user.list_users
     '''
-    ret = []
-
-    pythoncom.CoInitialize()
-    nt = win32com.client.Dispatch('AdsNameSpaces')
-
-    if useldap:
-        # try to recurse through the ldap server and get all user objects...
-        # could do 'LDAP:' and allow any domain member the ability to get all ldap users
-        # if anonymous binds are allowed, but for now, the code will try to connect to ldap on the local
-        # host
-        ret = _recursecontainersforusers('LDAP://localhost')
-    else:
-        results = nt.GetObject('', 'WinNT://.')
-        results.Filter = ['user']
-        for result in results:
-            ret.append(_getnetbiosusernamefromsid(result.AdsPath))
-    __context__['list_users'] = ret
-    return ret
-
-
-def _recursecontainersforusers(path):
-    '''
-    recursively get all user objects in all sub-containers from a top level container
-    for example:
-            _recursecontainersfrorusers('LDAP:')
-            would find all user objects in a domain via ldap
-    '''
-    pythoncom.CoInitialize()
-    nt = win32com.client.Dispatch('AdsNameSpaces')
-    ret = []
-    results = None
+    res = 0
+    users = []
+    user_list = []
+    dowhile = True
     try:
-        results = nt.GetObject('', path)
-    except pywintypes.com_error as com_err:
+        while res or dowhile:
+            dowhile = False
+            (users, _, res) = win32net.NetUserEnum(
+                None,
+                0,
+                win32netcon.FILTER_NORMAL_ACCOUNT,
+                res,
+                win32netcon.MAX_PREFERRED_LENGTH
+            )
+            for user in users:
+                user_list.append(user['name'])
+        return user_list
+    except win32net.error:
         pass
-
-    if results:
-        for result in results:
-            if result.Class.lower() == 'user':
-                ret.append(result.distinguishedName)
-            else:
-                ret = ret + (_recursecontainersforusers(result.AdsPath))
-
-    return ret
 
 
 def rename(name, new_name):
     '''
     Change the username for a named user
 
+    :param str name:
+        user name to change
+
+    :param str new_name:
+        the new name for the current user
+
+    :return:
+        True if successful. False is unsuccessful.
+    :rtype: bool
+
     CLI Example:
 
     .. code-block:: bash
 
-        salt '*' user.rename name new_name
-
-        domain users should use LDAP, to rename the cn, sAMAccountName, and UPN
-        salt 'domainController' user.rename name='cn=user,cn=Users,dc=domain,dc=dom' new_name='newUserName'
+        salt '*' user.rename jsnuffy jshmoe
     '''
-    ret = {'result': True,
-           'changes': [],
-           'comment': ''}
-
+    # Load information for the current name
     current_info = info(name)
+    if not current_info:
+        raise CommandExecutionError('User \'{0}\' does not exist'.format(name))
+
+    # Look for an existing user with the new name
+    new_info = info(new_name)
+    if new_info:
+        raise CommandExecutionError(
+            'User \'{0}\' already exists'.format(new_name)
+        )
+
+    # Rename the user account
+    # Connect to WMI
     pythoncom.CoInitialize()
-    nt = win32com.client.Dispatch('AdsNameSpaces')
+    c = wmi.WMI(find_classes=0)
 
-    if current_info:
-        try:
-            if "dc=" in name.lower():
-                userObj = nt.GetObject('', 'LDAP://' + name)
-                userObj.sAMAccountName = new_name
-                userObj.userPrincipalName = new_name + '@' + name[(
-                        name.find('dc=') + 3):len(name)].replace('dc=', '.').replace(',', '')
-                userObj.SetInfo()
-                containerObj = nt.GetObject('', userObj.parent)
-                containerObj.MoveHere(userObj.AdsPath, 'cn=' + new_name)
-            else:
-                containerObj = nt.GetObject('', 'WinNT://.,computer')
-                userObj = nt.GetObject('', 'WinNT://./' + name + ',user')
-                containerObj.MoveHere(userObj.AdsPath, new_name)
-            ret['changes'] = (
-                    'Successfully renamed user {0} to {1}'
-                    ).format(name, new_name)
-        except pywintypes.com_error as com_err:
-            ret['result'] = False
-            if len(com_err.excepinfo) >= 2:
-                if com_err.excepinfo[2] is not None:
-                    friendly_error = com_err.excepinfo[2].rstrip('\r\n')
-            ret['comment'] = (
-                    'Failed to remove user {0}.  {1}'
-                    ).format(name, friendly_error)
-    else:
-        ret['result'] = False
-        ret['comment'] = (
-                'The user {0} does not appear to exist.'
-                ).format(name)
+    # Get the user object
+    try:
+        user = c.Win32_UserAccount(Name=name)[0]
+    except IndexError:
+        raise CommandExecutionError('User \'{0}\' does not exist'.format(name))
 
-    return ret
+    # Rename the user
+    result = user.Rename(new_name)[0]
+
+    # Check the result (0 means success)
+    if not result == 0:
+        # Define Error Dict
+        error_dict = {0: 'Success',
+                      1: 'Instance not found',
+                      2: 'Instance required',
+                      3: 'Invalid parameter',
+                      4: 'User not found',
+                      5: 'Domain not found',
+                      6: 'Operation is allowed only on the primary domain controller of the domain',
+                      7: 'Operation is not allowed on the last administrative account',
+                      8: 'Operation is not allowed on specified special groups: user, admin, local, or guest',
+                      9: 'Other API error',
+                      10: 'Internal error'}
+        raise CommandExecutionError(
+            'There was an error renaming \'{0}\' to \'{1}\'. Error: {2}'
+            .format(name, new_name, error_dict[result])
+        )
+
+    return info(new_name).get('name') == new_name
 
 
-def _getnetbiosusernamefromsid(adspath):
+def current(sam=False):
     '''
-    gets the "domain\\username" of an adspath using the SID
+    Get the username that salt-minion is running under. If salt-minion is
+    running as a service it should return the Local System account. If salt is
+    running from a command prompt it should return the username that started the
+    command prompt.
+
+    .. versionadded:: 2015.5.6
+
+    :param bool sam:
+        False returns just the username without any domain notation. True
+        returns the domain with the username in the SAM format. Ie:
+
+        ``domain\\username``
+
+    :return:
+        Returns False if the username cannot be returned. Otherwise returns the
+        username.
+    :rtype: bool str
+
+    CLI Example:
+
+    .. code-block:: bash
+
+        salt '*' user.current
     '''
+    try:
+        if sam:
+            user_name = win32api.GetUserNameEx(win32con.NameSamCompatible)
+        else:
+            user_name = win32api.GetUserName()
+    except pywintypes.error as exc:
+        (number, context, message) = exc
+        log.error('Failed to get current user')
+        log.error('nbr: {0}'.format(number))
+        log.error('ctx: {0}'.format(context))
+        log.error('msg: {0}'.format(message))
+        return False
 
-    if 'NT AUTHORITY'.upper() in adspath.upper():
-        return adspath.replace('WinNT://', '').replace('/', '\\')
-    else:
-        try:
-            pythoncom.CoInitialize()
-            nt = win32com.client.Dispatch('AdsNameSpaces')
-            user_info = win32security.LookupAccountSid(
-                    None, pywintypes.SID(nt.GetObject('', adspath).objectSID))
-            return ('{0}\\{1}').format(user_info[1], user_info[0])
-        except Exception:
-            return adspath.replace('WinNT://', '').replace('/', '\\')
+    if not user_name:
+        return False
 
-
-def _fixlocaluser(username):
-    '''
-    prefixes a username w/o a backslash with the computername
-
-    i.e. _fixlocaluser('Administrator') would return 'computername\administrator'
-    '''
-    if 'dc=' not in username.lower():
-        if '\\' not in username:
-            try:
-                pythoncom.CoInitialize()
-                nt = win32com.client.Dispatch('AdsNameSpaces')
-                user_info = win32security.LookupAccountSid(
-                    None, pywintypes.SID(nt.GetObject('', 'WinNT://./' + username).objectSID))
-                username = (('{0}\\{1}').format(user_info[1], user_info[0]))
-            except Exception:
-                username = ('{0}\\{1}').format(__salt__['grains.get']('host'), username)
-
-    return username
+    return user_name

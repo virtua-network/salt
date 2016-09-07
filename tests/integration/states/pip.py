@@ -28,6 +28,7 @@ ensure_in_syspath('../../')
 import integration
 import salt.utils
 from salt.modules.virtualenv_mod import KNOWN_BINARY_NAMES
+from salt.exceptions import CommandExecutionError
 
 # Import 3rd-party libs
 import salt.ext.six as six
@@ -35,6 +36,15 @@ import salt.ext.six as six
 
 @skipIf(salt.utils.which_bin(KNOWN_BINARY_NAMES) is None, 'virtualenv not installed')
 class PipStateTest(integration.ModuleCase, integration.SaltReturnAssertsMixIn):
+
+    def test_pip_installed_removed(self):
+        '''
+        Tests installed and removed states
+        '''
+        ret = self.run_state('pip.installed', name='docker-py')
+        self.assertSaltTrueReturn(ret)
+        ret = self.run_state('pip.removed', name='docker-py')
+        self.assertSaltTrueReturn(ret)
 
     def test_pip_installed_errors(self):
         venv_dir = os.path.join(
@@ -164,6 +174,9 @@ class PipStateTest(integration.ModuleCase, integration.SaltReturnAssertsMixIn):
                 shutil.rmtree(venv_dir)
 
     def test_issue_5940_multiple_pip_mirrors(self):
+        '''
+        Test multiple pip mirrors.  This test only works with pip < 7.0.0
+        '''
         ret = self.run_function(
             'state.sls', mods='issue-5940-multiple-pip-mirrors'
         )
@@ -177,6 +190,10 @@ class PipStateTest(integration.ModuleCase, integration.SaltReturnAssertsMixIn):
             self.assertTrue(
                 os.path.isfile(os.path.join(venv_dir, 'bin', 'pep8'))
             )
+        except (AssertionError, CommandExecutionError):
+            pip_version = self.run_function('pip.version', [venv_dir])
+            if salt.utils.compare_versions(ver1=pip_version, oper='>=', ver2='7.0.0'):
+                self.skipTest('the --mirrors arg has been deprecated and removed in pip==7.0.0')
         finally:
             if os.path.isdir(venv_dir):
                 shutil.rmtree(venv_dir)
@@ -343,7 +360,7 @@ class PipStateTest(integration.ModuleCase, integration.SaltReturnAssertsMixIn):
             # Let's install a fixed version pip over whatever pip was
             # previously installed
             ret = self.run_function(
-                'pip.install', ['pip==1.3.1'], upgrade=True,
+                'pip.install', ['pip==6.0'], upgrade=True,
                 ignore_installed=True,
                 bin_env=venv_dir
             )
@@ -358,15 +375,15 @@ class PipStateTest(integration.ModuleCase, integration.SaltReturnAssertsMixIn):
                 pprint.pprint(ret)
                 raise
 
-            # Le't make sure we have pip 1.3.1 installed
+            # Le't make sure we have pip 6.0 installed
             self.assertEqual(
                 self.run_function('pip.list', ['pip'], bin_env=venv_dir),
-                {'pip': '1.3.1'}
+                {'pip': '6.0'}
             )
 
             # Now the actual pip upgrade pip test
             ret = self.run_state(
-                'pip.installed', name='pip==1.4.1', upgrade=True,
+                'pip.installed', name='pip==6.0.7', upgrade=True,
                 bin_env=venv_dir
             )
             try:
@@ -374,7 +391,7 @@ class PipStateTest(integration.ModuleCase, integration.SaltReturnAssertsMixIn):
                 self.assertInSaltReturn(
                     'Installed',
                     ret,
-                    ['changes', 'pip==1.4.1']
+                    ['changes', 'pip==6.0.7']
                 )
             except AssertionError:
                 import pprint

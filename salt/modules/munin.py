@@ -21,7 +21,7 @@ def __virtual__():
     '''
     if os.path.exists('/etc/munin/munin-node.conf'):
         return 'munin'
-    return False
+    return (False, 'The munin execution module cannot be loaded: munin-node is not installed.')
 
 
 def _get_conf(fname='/etc/munin/munin-node.cfg'):
@@ -101,7 +101,10 @@ def list_plugins():
     for plugin in pluginlist:
         # Check if execute bit
         statf = os.path.join(PLUGINDIR, plugin)
-        executebit = stat.S_IXUSR & os.stat(statf)[stat.ST_MODE]
+        try:
+            executebit = stat.S_IXUSR & os.stat(statf)[stat.ST_MODE]
+        except OSError:
+            pass
         if executebit:
             ret.append(plugin)
     return ret

@@ -11,6 +11,7 @@ See http://code.google.com/p/psutil.
 from __future__ import absolute_import
 import time
 import datetime
+import re
 
 # Import salt libs
 from salt.exceptions import SaltInvocationError, CommandExecutionError
@@ -19,10 +20,10 @@ from salt.exceptions import SaltInvocationError, CommandExecutionError
 import salt.ext.six as six
 # pylint: disable=import-error
 try:
-    import psutil
+    import salt.utils.psutil_compat as psutil
 
     HAS_PSUTIL = True
-    PSUTIL2 = psutil.version_info >= (2, 0)
+    PSUTIL2 = getattr(psutil, 'version_info', ()) >= (2, 0)
 except ImportError:
     HAS_PSUTIL = False
 # pylint: enable=import-error
@@ -30,7 +31,7 @@ except ImportError:
 
 def __virtual__():
     if not HAS_PSUTIL:
-        return False
+        return False, 'The ps module cannot be loaded: python module psutil not installed.'
 
     # Functions and attributes used in this execution module seem to have been
     # added as of psutil 0.3.0, from an inspection of the source code. Only
@@ -41,7 +42,7 @@ def __virtual__():
     # as of Dec. 2013 EPEL is on 0.6.1, Debian 7 is on 0.5.1, etc.).
     if psutil.version_info >= (0, 3, 0):
         return True
-    return False
+    return (False, 'The ps execution module cannot be loaded: the psutil python module version {0} is less than 0.3.0'.format(psutil.version_info))
 
 
 def _get_proc_cmdline(proc):
@@ -50,7 +51,10 @@ def _get_proc_cmdline(proc):
 
     It's backward compatible with < 2.0 versions of psutil.
     '''
-    return proc.cmdline() if PSUTIL2 else proc.cmdline
+    try:
+        return proc.cmdline() if PSUTIL2 else proc.cmdline
+    except (psutil.NoSuchProcess, psutil.AccessDenied):
+        return ''
 
 
 def _get_proc_create_time(proc):
@@ -59,7 +63,10 @@ def _get_proc_create_time(proc):
 
     It's backward compatible with < 2.0 versions of psutil.
     '''
-    return proc.create_time() if PSUTIL2 else proc.create_time
+    try:
+        return proc.create_time() if PSUTIL2 else proc.create_time
+    except (psutil.NoSuchProcess, psutil.AccessDenied):
+        return None
 
 
 def _get_proc_name(proc):
@@ -68,12 +75,10 @@ def _get_proc_name(proc):
 
     It's backward compatible with < 2.0 versions of psutil.
     '''
-    ret = []
     try:
-        ret = proc.name() if PSUTIL2 else proc.name
+        return proc.name() if PSUTIL2 else proc.name
     except (psutil.NoSuchProcess, psutil.AccessDenied):
-        pass
-    return ret
+        return []
 
 
 def _get_proc_status(proc):
@@ -82,7 +87,10 @@ def _get_proc_status(proc):
 
     It's backward compatible with < 2.0 versions of psutil.
     '''
-    return proc.status() if PSUTIL2 else proc.status
+    try:
+        return proc.status() if PSUTIL2 else proc.status
+    except (psutil.NoSuchProcess, psutil.AccessDenied):
+        return None
 
 
 def _get_proc_username(proc):
@@ -91,7 +99,10 @@ def _get_proc_username(proc):
 
     It's backward compatible with < 2.0 versions of psutil.
     '''
-    return proc.username() if PSUTIL2 else proc.username
+    try:
+        return proc.username() if PSUTIL2 else proc.username
+    except (psutil.NoSuchProcess, psutil.AccessDenied, KeyError):
+        return None
 
 
 def _get_proc_pid(proc):
@@ -119,10 +130,12 @@ def top(num_processes=5, interval=3):
     '''
     result = []
     start_usage = {}
-    for pid in psutil.get_pid_list():
+    for pid in psutil.pids():
         try:
             process = psutil.Process(pid)
-            user, system = process.get_cpu_times()
+            user, system = process.cpu_times()
+        except ValueError:
+            user, system, _, _ = process.cpu_times()
         except psutil.NoSuchProcess:
             continue
         start_usage[process] = user + system
@@ -130,7 +143,9 @@ def top(num_processes=5, interval=3):
     usage = set()
     for process, start in six.iteritems(start_usage):
         try:
-            user, system = process.get_cpu_times()
+            user, system = process.cpu_times()
+        except ValueError:
+            user, system, _, _ = process.cpu_times()
         except psutil.NoSuchProcess:
             continue
         now = user + system
@@ -141,7 +156,7 @@ def top(num_processes=5, interval=3):
         if num_processes and idx >= num_processes:
             break
         if len(_get_proc_cmdline(process)) == 0:
-            cmdline = [_get_proc_name(process)]
+            cmdline = _get_proc_name(process)
         else:
             cmdline = _get_proc_cmdline(process)
         info = {'cmd': cmdline,
@@ -152,9 +167,9 @@ def top(num_processes=5, interval=3):
                 'cpu': {},
                 'mem': {},
         }
-        for key, value in six.iteritems(process.get_cpu_times()._asdict()):
+        for key, value in six.iteritems(process.cpu_times()._asdict()):
             info['cpu'][key] = value
-        for key, value in six.iteritems(process.get_memory_info()._asdict()):
+        for key, value in six.iteritems(process.memory_info()._asdict()):
             info['mem'][key] = value
         result.append(info)
 
@@ -171,7 +186,7 @@ def get_pid_list():
 
         salt '*' ps.get_pid_list
     '''
-    return psutil.get_pid_list()
+    return psutil.pids()
 
 
 def proc_info(pid, attrs=None):
@@ -531,7 +546,7 @@ def boot_time(time_format=None):
     except AttributeError:
         # get_boot_time() has been removed in newer psutil versions, and has
         # been replaced by boot_time() which provides the same information.
-        b_time = int(psutil.get_boot_time())
+        b_time = int(psutil.boot_time())
     if time_format:
         # Load epoch timestamp as a datetime.datetime object
         b_time = datetime.datetime.fromtimestamp(b_time)
@@ -555,9 +570,9 @@ def network_io_counters(interface=None):
         salt '*' ps.network_io_counters interface=eth0
     '''
     if not interface:
-        return dict(psutil.network_io_counters()._asdict())
+        return dict(psutil.net_io_counters()._asdict())
     else:
-        stats = psutil.network_io_counters(pernic=True)
+        stats = psutil.net_io_counters(pernic=True)
         if interface in stats:
             return dict(stats[interface]._asdict())
         else:
@@ -597,7 +612,7 @@ def get_users():
         salt '*' ps.get_users
     '''
     try:
-        recs = psutil.get_users()
+        recs = psutil.users()
         return [dict(x._asdict()) for x in recs]
     except AttributeError:
         # get_users is only present in psutil > v0.5.0
@@ -618,3 +633,73 @@ def get_users():
                                    'started': started, 'host': rec[5]})
         except ImportError:
             return False
+
+
+def lsof(name):
+    '''
+    Retrieve the lsof informations of the given process name.
+
+    CLI Example:
+
+    .. code-block:: bash
+
+        salt '*' ps.lsof apache2
+    '''
+    sanitize_name = str(name)
+    lsof_infos = __salt__['cmd.run']("lsof -c " + sanitize_name)
+    ret = []
+    ret.extend([sanitize_name, lsof_infos])
+    return ret
+
+
+def netstat(name):
+    '''
+    Retrieve the netstat informations of the given process name.
+
+    CLI Example:
+
+    .. code-block:: bash
+
+        salt '*' ps.netstat apache2
+    '''
+    sanitize_name = str(name)
+    netstat_infos = __salt__['cmd.run']("netstat -nap")
+    found_infos = []
+    ret = []
+    for info in netstat_infos.splitlines():
+        if info.find(sanitize_name) != -1:
+            found_infos.append(info)
+    ret.extend([sanitize_name, found_infos])
+    return ret
+
+
+def psaux(name):
+    '''
+    Retrieve information corresponding to a "ps aux" filtered
+    with the given pattern. It could be just a name or a regular
+    expression (using python search from "re" module).
+
+    CLI Example:
+
+    .. code-block:: bash
+
+        salt '*' ps.psaux www-data.+apache2
+    '''
+    sanitize_name = str(name)
+    pattern = re.compile(sanitize_name)
+    salt_exception_pattern = re.compile("salt.+ps.psaux.+")
+    ps_aux = __salt__['cmd.run']("ps aux")
+    found_infos = []
+    ret = []
+    nb_lines = 0
+    for info in ps_aux.splitlines():
+        found = pattern.search(info)
+        if found is not None:
+            # remove 'salt' command from results
+            if not salt_exception_pattern.search(info):
+                nb_lines += 1
+                found_infos.append(info)
+    pid_count = str(nb_lines) + " occurence(s)."
+    ret = []
+    ret.extend([sanitize_name, found_infos, pid_count])
+    return ret

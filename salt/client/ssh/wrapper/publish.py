@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 '''
-.. versionadded:: 2015.2.0
+.. versionadded:: 2015.5.0
 
 Salt-ssh wrapper functions for the publish module.
 
@@ -72,7 +72,9 @@ def _publish(tgt,
         arg = []
 
     # Set up opts for the SSH object
-    opts = copy.deepcopy(__opts__)
+    opts = copy.deepcopy(__context__['master_opts'])
+    minopts = copy.deepcopy(__opts__)
+    opts.update(minopts)
     if roster:
         opts['roster'] = roster
     if timeout:

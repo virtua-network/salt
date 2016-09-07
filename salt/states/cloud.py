@@ -55,7 +55,16 @@ def _valid(name, comment='', changes=None):
             'comment': comment}
 
 
-def present(name, cloud_provider, onlyif=None, unless=None, **kwargs):
+def _get_instance(names):
+    # for some reason loader overwrites __opts__['test'] with default
+    # value of False, thus store and then load it again after action
+    test = __opts__.get('test', False)
+    instance = __salt__['cloud.action'](fun='show_instance', names=names)
+    __opts__['test'] = test
+    return instance
+
+
+def present(name, cloud_provider, onlyif=None, unless=None, opts=None, **kwargs):
     '''
     Spin up a single instance on a cloud provider, using salt-cloud. This state
     does not take a profile argument; rather, it takes the arguments that would
@@ -78,6 +87,9 @@ def present(name, cloud_provider, onlyif=None, unless=None, **kwargs):
 
     unless
         Do not run the state at least unless succeed
+
+    opts
+        Any extra opts that need to be used
     '''
     ret = {'name': name,
            'changes': {},
@@ -111,7 +123,7 @@ def present(name, cloud_provider, onlyif=None, unless=None, **kwargs):
         ret['comment'] = 'Instance {0} needs to be created'.format(name)
         return ret
 
-    info = __salt__['cloud.create'](cloud_provider, name, **kwargs)
+    info = __salt__['cloud.create'](cloud_provider, name, opts=opts, **kwargs)
     if info and 'Error' not in info:
         ret['changes'] = info
         ret['result'] = True
@@ -205,7 +217,7 @@ def absent(name, onlyif=None, unless=None):
     return ret
 
 
-def profile(name, profile, onlyif=None, unless=None, **kwargs):
+def profile(name, profile, onlyif=None, unless=None, opts=None, **kwargs):
     '''
     Create a single instance on a cloud provider, using a salt-cloud profile.
 
@@ -230,6 +242,8 @@ def profile(name, profile, onlyif=None, unless=None, **kwargs):
     kwargs
         Any profile override or addition
 
+    opts
+        Any extra opts that need to be used
     '''
     ret = {'name': name,
            'changes': {},
@@ -250,9 +264,8 @@ def profile(name, profile, onlyif=None, unless=None, **kwargs):
         elif isinstance(unless, six.string_types):
             if retcode(unless, python_shell=True) == 0:
                 return _valid(name, comment='unless execution succeeded')
-    instance = __salt__['cloud.action'](fun='show_instance', names=[name])
-    prov = str(next(six.iterkeys(instance)))
-    if instance and 'Not Actioned' not in prov:
+    instance = _get_instance([name])
+    if instance and not any('Not Actioned' in key for key in instance):
         ret['result'] = True
         ret['comment'] = 'Already present instance {0}'.format(name)
         return ret
@@ -261,7 +274,7 @@ def profile(name, profile, onlyif=None, unless=None, **kwargs):
         ret['comment'] = 'Instance {0} needs to be created'.format(name)
         return ret
 
-    info = __salt__['cloud.profile'](profile, name, vm_overrides=kwargs)
+    info = __salt__['cloud.profile'](profile, name, vm_overrides=kwargs, opts=opts)
 
     # get either {Error: ''} or {namestring: {Error: ''}}
     # which is what we can get from providers returns
@@ -390,8 +403,9 @@ def volume_attached(name, server_name, provider=None, **kwargs):
 
     if name in volumes and volumes[name]['attachments']:
         volume = volumes[name]
-        ret['comment'] = ('Volume {name} is already'
-                          'attached: {attachments}').format(**volumes[name])
+        ret['comment'] = (
+                          'Volume {name} is already attached: {attachments}'
+                          ).format(**volumes[name])
         ret['result'] = True
         return ret
     elif name not in volumes:

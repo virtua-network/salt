@@ -64,7 +64,7 @@ def __virtual__():
     '''
     if HAS_LIBS:
         return __virtualname__
-    return False
+    return (False, "Module xmpp: required libraries failed to load")
 
 
 class SleekXMPPMUC(logging.Filter):
@@ -122,7 +122,9 @@ def send_msg(recipient, message, jid=None, password=None, profile=None):
     '''
     Send a message to an XMPP recipient. Designed for use in states.
 
-    CLI Examples::
+    CLI Examples:
+
+    .. code-block:: bash
 
         xmpp.send_msg 'admins@xmpp.example.com' 'This is a salt module test' \
             profile='my-xmpp-account'
@@ -155,7 +157,9 @@ def send_msg_multi(message,
     Send a message to an XMPP recipient, support send message to
     multiple recipients or chat room.
 
-    CLI Examples::
+    CLI Examples:
+
+    .. code-block:: bash
 
         xmpp.send_msg recipients=['admins@xmpp.example.com'] \
             rooms=['secret@conference.xmpp.example.com'] \

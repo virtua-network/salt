@@ -78,6 +78,9 @@ def running(name,
         installed
 
     '''
+    if name.endswith(':*'):
+        name = name[:-1]
+
     ret = {'name': name, 'result': True, 'comment': '', 'changes': {}}
 
     if 'supervisord.status' not in __salt__:
@@ -118,7 +121,7 @@ def running(name,
                     # Process group
                     if len(to_start) == len(matches):
                         ret['comment'] = (
-                            'All services in group {0!r} will be started'
+                            'All services in group \'{0}\' will be started'
                             .format(name)
                         )
                     else:
@@ -133,7 +136,7 @@ def running(name,
                 if name.endswith(':'):
                     # Process group
                     ret['comment'] = (
-                        'All services in group {0!r} are already running'
+                        'All services in group \'{0}\' are already running'
                         .format(name)
                     )
                 else:
@@ -143,7 +146,7 @@ def running(name,
             ret['result'] = None
             # Process/group needs to be added
             if name.endswith(':'):
-                _type = 'Group {0!r}'.format(name)
+                _type = 'Group \'{0}\''.format(name)
             else:
                 _type = 'Service {0}'.format(name)
             ret['comment'] = '{0} will be added and started'.format(_type)
@@ -332,6 +335,7 @@ def dead(name,
                 bin_env=bin_env
             )}
             ret.update(_check_error(result, comment))
+            ret['changes'][name] = comment
             log.debug(six.text_type(result))
     return ret
 
@@ -341,7 +345,8 @@ def mod_watch(name,
               update=False,
               user=None,
               conf_file=None,
-              bin_env=None):
+              bin_env=None,
+              **kwargs):
     # Always restart on watch
     return running(
         name,

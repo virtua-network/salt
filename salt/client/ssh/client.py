@@ -18,7 +18,7 @@ class SSHClient(object):
     '''
     Create a client object for executing routines via the salt-ssh backend
 
-    .. versionaddedd:: 2015.2
+    .. versionadded:: 2015.5.0
     '''
     def __init__(self,
                  c_path=os.path.join(syspaths.CONFIG_DIR, 'master'),
@@ -72,7 +72,7 @@ class SSHClient(object):
         Execute a single command via the salt-ssh subsystem and return a
         generator
 
-        .. versionaddedd:: 2015.2
+        .. versionadded:: 2015.5.0
         '''
         ssh = self._prep_ssh(
                 tgt,
@@ -82,7 +82,7 @@ class SSHClient(object):
                 expr_form,
                 kwarg,
                 **kwargs)
-        for ret in ssh.run_iter():
+        for ret in ssh.run_iter(jid=kwargs.get('jid', None)):
             yield ret
 
     def cmd(
@@ -98,7 +98,7 @@ class SSHClient(object):
         Execute a single command via the salt-ssh subsystem and return all
         routines at once
 
-        .. versionaddedd:: 2015.2
+        .. versionadded:: 2015.5.0
         '''
         ssh = self._prep_ssh(
                 tgt,
@@ -109,7 +109,7 @@ class SSHClient(object):
                 kwarg,
                 **kwargs)
         final = {}
-        for ret in ssh.run_iter():
+        for ret in ssh.run_iter(jid=kwargs.get('jid', None)):
             final.update(ret)
         return final
 
@@ -117,7 +117,7 @@ class SSHClient(object):
         '''
         Execute a salt-ssh call synchronously.
 
-        .. versionaddedd:: 2015.2
+        .. versionadded:: 2015.5.0
 
         WARNING: Eauth is **NOT** respected
 
@@ -132,12 +132,20 @@ class SSHClient(object):
                 })
             {'silver': {'fun_args': [], 'jid': '20141202152721523072', 'return': True, 'retcode': 0, 'success': True, 'fun': 'test.ping', 'id': 'silver'}}
         '''
+
+        kwargs = copy.deepcopy(low)
+
+        for ignore in ['tgt', 'fun', 'arg', 'timeout', 'expr_form', 'kwarg']:
+            if ignore in kwargs:
+                del kwargs[ignore]
+
         return self.cmd(low['tgt'],
                         low['fun'],
                         low.get('arg', []),
                         low.get('timeout'),
                         low.get('expr_form'),
-                        low.get('kwarg'))
+                        low.get('kwarg'),
+                        **kwargs)
 
     def cmd_async(self, low, timeout=None):
         '''

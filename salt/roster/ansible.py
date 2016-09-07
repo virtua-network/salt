@@ -96,7 +96,6 @@ from __future__ import absolute_import
 import os
 import re
 import fnmatch
-import shlex
 import json
 import subprocess
 
@@ -140,9 +139,10 @@ class Target(object):
         Execute the correct tgt_type routine and return
         '''
         try:
-            return getattr(self, 'get_{0}'.format(self.tgt_type))()
+            routine = getattr(self, 'get_{0}'.format(self.tgt_type))
         except AttributeError:
             return {}
+        return routine()
 
     def get_glob(self):
         '''
@@ -210,7 +210,7 @@ class Inventory(Target):
         '''
         Parse lines in the inventory file that are under the same group block
         '''
-        line_args = shlex.split(line)
+        line_args = salt.utils.shlex_split(line)
         name = line_args[0]
         host = {line_args[0]: dict()}
         for arg in line_args[1:]:
@@ -249,7 +249,7 @@ class Script(Target):
         self.tgt = tgt
         self.tgt_type = tgt_type
         inventory, error = subprocess.Popen([inventory_file], shell=True, stdout=subprocess.PIPE).communicate()
-        self.inventory = json.loads(inventory)
+        self.inventory = json.loads(salt.utils.to_str(inventory))
         self.meta = self.inventory.get('_meta', {})
         self.groups = dict()
         self.hostvars = dict()

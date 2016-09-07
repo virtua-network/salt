@@ -27,7 +27,6 @@ from salt.exceptions import SaltCloudSystemExit
 
 import salt.client
 import salt.runner
-import salt.syspaths
 
 
 # Import 3rd-party libs
@@ -69,7 +68,7 @@ def _minion_opts(cfg='minion'):
     if 'conf_file' in __opts__:
         default_dir = os.path.dirname(__opts__['conf_file'])
     else:
-        default_dir = salt.syspaths.CONFIG_DIR,
+        default_dir = __opts__['config_dir'],
     cfg = os.environ.get(
         'SALT_MINION_CONFIG', os.path.join(default_dir, cfg))
     opts = config.minion_config(cfg)
@@ -80,7 +79,7 @@ def _master_opts(cfg='master'):
     cfg = os.environ.get(
         'SALT_MASTER_CONFIG',
         __opts__.get('conf_file',
-                     os.path.join(salt.syspaths.CONFIG_DIR, cfg)))
+                     os.path.join(__opts__['config_dir'], cfg)))
     opts = config.master_config(cfg)
     return opts
 
@@ -228,6 +227,10 @@ def _salt(fun, *args, **kw):
             if target in cret:
                 ret = cret[target]
                 break
+            # recent changes
+            elif 'data' in cret and 'outputter' in cret:
+                ret = cret['data']
+                break
             # special case, some answers may be crafted
             # to handle the unresponsivness of a specific command
             # which is also meaningful, e.g. a minion not yet provisioned
@@ -258,7 +261,9 @@ def avail_images():
 def list_nodes(conn=None, call=None):
     hide = False
     names = __opts__.get('names', [])
-    profile = __opts__.get('profile', [])
+    profiles = __opts__.get('profiles', {})
+    profile = __opts__.get('profile',
+                           __opts__.get('internal_lxc_profile', []))
     destroy_opt = __opts__.get('destroy', False)
     action = __opts__.get('action', '')
     for opt in ['full_query', 'select_query', 'query']:
@@ -272,12 +277,17 @@ def list_nodes(conn=None, call=None):
         hide = True
     if not get_configured_provider():
         return
-    lxclist = _salt('lxc.list', extra=True)
+
+    path = None
+    if profile and profile in profiles:
+        path = profiles[profile].get('path', None)
+    lxclist = _salt('lxc.list', extra=True, path=path)
     nodes = {}
     for state, lxcs in six.iteritems(lxclist):
         for lxcc, linfos in six.iteritems(lxcs):
             info = {
                 'id': lxcc,
+                'name': lxcc,  # required for cloud cache
                 'image': None,
                 'size': linfos['size'],
                 'state': state.lower(),
@@ -288,14 +298,18 @@ def list_nodes(conn=None, call=None):
             # so we hide the running vm from being seen as already installed
             # do not also mask half configured nodes which are explicitly asked
             # to be acted on, on the command line
-            if (
-                (call in ['full'] or not hide)
-                and (
-                    (lxcc in names and call in ['action'])
-                    or (call in ['full'])
-                )
-            ):
-                nodes[lxcc] = info
+            if (call in ['full'] or not hide) and ((lxcc in names and call in ['action']) or call in ['full']):
+                nodes[lxcc] = {
+                    'id': lxcc,
+                    'name': lxcc,  # required for cloud cache
+                    'image': None,
+                    'size': linfos['size'],
+                    'state': state.lower(),
+                    'public_ips': linfos['public_ips'],
+                    'private_ips': linfos['private_ips'],
+                }
+            else:
+                nodes[lxcc] = {'id': lxcc, 'state': state.lower()}
     return nodes
 
 
@@ -317,7 +331,7 @@ def show_instance(name, call=None):
     if not call:
         call = 'action'
     nodes = list_nodes_full(call=call)
-    salt.utils.cloud.cache_node(nodes[name], __active_provider_name__, __opts__)
+    __utils__['cloud.cache_node'](nodes[name], __active_provider_name__, __opts__)
     return nodes[name]
 
 
@@ -329,7 +343,7 @@ def list_nodes_select(call=None):
         call = 'select'
     if not get_configured_provider():
         return
-    info = ['id', 'image', 'size', 'state', 'public_ips', 'private_ips']
+    info = ['id', 'name', 'image', 'size', 'state', 'public_ips', 'private_ips']
     return salt.utils.cloud.list_nodes_select(
         list_nodes_full(call='action'),
         __opts__.get('query.selection', info), call)
@@ -361,6 +375,12 @@ last message: {comment}'''.format(**ret)
 def destroy(vm_, call=None):
     '''Destroy a lxc container'''
     destroy_opt = __opts__.get('destroy', False)
+    profiles = __opts__.get('profiles', {})
+    profile = __opts__.get('profile',
+                           __opts__.get('internal_lxc_profile', []))
+    path = None
+    if profile and profile in profiles:
+        path = profiles[profile].get('path', None)
     action = __opts__.get('action', '')
     if action != 'destroy' and not destroy_opt:
         raise SaltCloudSystemExit(
@@ -371,27 +391,29 @@ def destroy(vm_, call=None):
         return
     ret = {'comment': '{0} was not found'.format(vm_),
            'result': False}
-    if _salt('lxc.info', vm_):
-        salt.utils.cloud.fire_event(
+    if _salt('lxc.info', vm_, path=path):
+        __utils__['cloud.fire_event'](
             'event',
             'destroying instance',
             'salt/cloud/{0}/destroying'.format(vm_),
-            {'name': vm_, 'instance_id': vm_},
+            args={'name': vm_, 'instance_id': vm_},
+            sock_dir=__opts__['sock_dir'],
             transport=__opts__['transport']
         )
-        cret = _salt('lxc.destroy', vm_, stop=True)
-        ret['result'] = cret['change']
+        cret = _salt('lxc.destroy', vm_, stop=True, path=path)
+        ret['result'] = cret['result']
         if ret['result']:
             ret['comment'] = '{0} was destroyed'.format(vm_)
-            salt.utils.cloud.fire_event(
+            __utils__['cloud.fire_event'](
                 'event',
                 'destroyed instance',
                 'salt/cloud/{0}/destroyed'.format(vm_),
-                {'name': vm_, 'instance_id': vm_},
+                args={'name': vm_, 'instance_id': vm_},
+                sock_dir=__opts__['sock_dir'],
                 transport=__opts__['transport']
             )
             if __opts__.get('update_cachedir', False) is True:
-                salt.utils.cloud.delete_minion_cachedir(vm_, __active_provider_name__.split(':')[0], __opts__)
+                __utils__['cloud.delete_minion_cachedir'](vm_, __active_provider_name__.split(':')[0], __opts__)
     return ret
 
 
@@ -403,18 +425,30 @@ def create(vm_, call=None):
     NOTE: Most of the initialization code has been moved and merged
     with the lxc runner and lxc.init functions
     '''
-    __grains__ = _salt('grains.items')
     prov = get_configured_provider(vm_)
     if not prov:
         return
-    profile = vm_.get('profile', None)
-    if not profile:
-        profile = {}
-    salt.utils.cloud.fire_event(
-        'event', 'starting create',
+    # we cant use profile as a configuration key as it conflicts
+    # with salt cloud internals
+    profile = vm_.get(
+        'lxc_profile',
+        vm_.get('container_profile', None))
+
+    # Since using "provider: <provider-engine>" is deprecated, alias provider
+    # to use driver: "driver: <provider-engine>"
+    if 'provider' in vm_:
+        vm_['driver'] = vm_.pop('provider')
+
+    __utils__['cloud.fire_event'](
+        'event',
+        'starting create',
         'salt/cloud/{0}/creating'.format(vm_['name']),
-        {'name': vm_['name'], 'profile': vm_['profile'],
-         'provider': vm_['provider'], },
+        args={
+            'name': vm_['name'],
+            'profile': profile,
+            'provider': vm_['driver'],
+        },
+        sock_dir=__opts__['sock_dir'],
         transport=__opts__['transport'])
     ret = {'name': vm_['name'], 'changes': {}, 'result': True, 'comment': ''}
     if 'pub_key' not in vm_ and 'priv_key' not in vm_:
@@ -425,12 +459,39 @@ def create(vm_, call=None):
     # get the minion key pair to distribute back to the container
     kwarg = copy.deepcopy(vm_)
     kwarg['host'] = prov['target']
+    kwarg['profile'] = profile
     cret = _runner().cmd('lxc.cloud_init', [vm_['name']], kwarg=kwarg)
     ret['runner_return'] = cret
-    if cret['result']:
-        ret['result'] = False
+    ret['result'] = cret['result']
     if not ret['result']:
         ret['Error'] = 'Error while creating {0},'.format(vm_['name'])
+    else:
+        ret['changes']['created'] = 'created'
+
+    # When using cloud states to manage LXC containers
+    # __opts__['profile'] is not implicitly reset between operations
+    # on different containers. However list_nodes will hide container
+    # if profile is set in opts assuming that it have to be created.
+    # But in cloud state we do want to check at first if it really
+    # exists hence the need to remove profile from global opts once
+    # current container is created.
+    if 'profile' in __opts__:
+        __opts__['internal_lxc_profile'] = __opts__['profile']
+        del __opts__['profile']
+
+    __utils__['cloud.fire_event'](
+        'event',
+        'created instance',
+        'salt/cloud/{0}/created'.format(vm_['name']),
+        args={
+            'name': vm_['name'],
+            'profile': vm_['profile'],
+            'provider': vm_['driver'],
+        },
+        sock_dir=__opts__['sock_dir'],
+        transport=__opts__['transport']
+    )
+
     return ret
 
 
@@ -479,27 +540,27 @@ def get_configured_provider(vm_=None):
         profs = __opts__['profiles']
         tgt = 'profile: {0}'.format(curprof)
         if (
-            curprof in profs
-            and profs[curprof]['provider'] == __active_provider_name__
+            curprof in profs and
+            profs[curprof]['provider'] == __active_provider_name__
         ):
             prov, cdriver = profs[curprof]['provider'].split(':')
             tgt += ' provider: {0}'.format(prov)
             data = get_provider(prov)
             matched = True
     # fallback if we have only __active_provider_name__
-    if ((__opts__.get('destroy', False) and not data)
-        or (not matched and __active_provider_name__)):
+    if (
+        (__opts__.get('destroy', False) and not data) or (
+            not matched and __active_provider_name__
+        )
+    ):
         data = __opts__.get('providers',
-                           {}).get(dalias, {}).get(driver, {})
+                            {}).get(dalias, {}).get(driver, {})
     # in all cases, verify that the linked saltmaster is alive.
     if data:
-        try:
-            ret = _salt('test.ping', salt_target=data['target'])
-            if not ret:
-                raise Exception('error')
-            return data
-        except Exception:
+        ret = _salt('test.ping', salt_target=data['target'])
+        if not ret:
             raise SaltCloudSystemExit(
                 'Configured provider {0} minion: {1} is unreachable'.format(
                     __active_provider_name__, data['target']))
+        return data
     return False

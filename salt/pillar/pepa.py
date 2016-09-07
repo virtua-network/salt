@@ -283,13 +283,19 @@ from os.path import isfile, join
 import salt.ext.six as six
 from salt.ext.six.moves import input  # pylint: disable=import-error,redefined-builtin
 
+try:
+    import requests
+    HAS_REQUESTS = True
+except ImportError:
+    HAS_REQUESTS = False
+
 # Import Salt libs
 import salt.utils
 
 # Only used when called from a terminal
 log = None
 if __name__ == '__main__':
-    import argparse
+    import argparse  # pylint: disable=minimum-python-version
 
     parser = argparse.ArgumentParser()
     parser.add_argument('hostname', help='Hostname')
@@ -344,6 +350,9 @@ def __virtual__():
     '''
     Only return if all the modules are available
     '''
+    if not HAS_REQUESTS:
+        return False
+
     return True
 
 
@@ -388,7 +397,7 @@ def ext_pillar(minion_id, pillar, resource, sequence, subkey=False, subkey_only=
 
     for categ, info in [next(six.iteritems(s)) for s in sequence]:
         if categ not in inp:
-            log.warn("Category is not defined: {0}".format(categ))
+            log.warning("Category is not defined: {0}".format(categ))
             continue
 
         alias = None
@@ -407,7 +416,7 @@ def ext_pillar(minion_id, pillar, resource, sequence, subkey=False, subkey_only=
         if isinstance(inp[categ], list):
             entries = inp[categ]
         elif not inp[categ]:
-            log.warn("Category has no value set: {0}".format(categ))
+            log.warning("Category has no value set: {0}".format(categ))
             continue
         else:
             entries = [inp[categ]]

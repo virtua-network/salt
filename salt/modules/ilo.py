@@ -6,7 +6,7 @@ Manage HP ILO
 '''
 from __future__ import absolute_import
 
-import xml.etree.cElementTree as ET
+from salt._compat import ElementTree as ET
 import salt.utils
 import os
 import tempfile
@@ -23,7 +23,7 @@ def __virtual__():
     if salt.utils.which('hponcfg'):
         return True
 
-    return False
+    return (False, 'ilo execution module not loaded: the hponcfg binary is not in the path.')
 
 
 def __execute_cmd(name, xml):
@@ -37,8 +37,8 @@ def __execute_cmd(name, xml):
     if not os.path.isdir(tmp_dir):
         os.mkdir(tmp_dir)
     with tempfile.NamedTemporaryFile(dir=tmp_dir,
-                                     prefix=name,
-                                     suffix=os.getpid(),
+                                     prefix=name+str(os.getpid()),
+                                     suffix='.xml',
                                      delete=False) as fh:
         tmpfilename = fh.name
         fh.write(xml)
@@ -56,7 +56,7 @@ def __execute_cmd(name, xml):
 
     try:
         for i in ET.fromstring(''.join(cmd['stdout'].splitlines()[3:-1])):
-            # Make sure dict keys dont collide
+            # Make sure dict keys don't collide
             if ret[name.replace('_', ' ')].get(i.tag, False):
                 ret[name.replace('_', ' ')].update(
                     {i.tag + '_' + str(id_num): i.attrib}

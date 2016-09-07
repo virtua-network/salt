@@ -252,7 +252,7 @@ Use ``module.function`` notation
 
 So-called "short-declaration" notation is preferred for referencing state
 modules and state functions. It provides a consistent pattern of
-``module.function`` shared between Salt States, the Reactor, Overstate, Salt
+``module.function`` shared between Salt States, the Reactor, Salt
 Mine, the Scheduler, as well as with the CLI.
 
 .. code-block:: yaml
@@ -367,7 +367,8 @@ variables or interact.
   for :ref:`any of the alternate renderers <all-salt.renderers>` in Salt.)
 * Highstate can be thought of as a human-friendly data structure; easy to write
   and easy to read.
-* Salt's state compiler validates the highstate and compiles it to low state.
+* Salt's state compiler validates the :ref:`highstate <running-highstate>` and
+  compiles it to low state.
 * Low state can be thought of as a machine-friendly data structure. It is a
   list of dictionaries that each map directly to a function call.
 * Salt's state system finally starts and executes on each "chunk" in the low
@@ -416,11 +417,15 @@ from the Salt Master. For example:
 
     {# or #}
 
-    {% load_json 'path/to/file.json' as some_data %}
+    {% import_yaml 'path/to/file.yaml' as some_data %}
 
     {# or #}
 
-    {% load_text 'path/to/ssh_key.pub' as ssh_pub_key %}
+    {% import_json 'path/to/file.json' as some_data %}
+
+    {# or #}
+
+    {% import_text 'path/to/ssh_key.pub' as ssh_pub_key %}
 
     {# or #}
 
@@ -432,7 +437,7 @@ data from the state that will make use of the data.
 Light conditionals and looping
 ``````````````````````````````
 
-Jinja is extremely powerful for programatically generating Salt states. It is
+Jinja is extremely powerful for programmatically generating Salt states. It is
 also easy to overuse. As a rule of thumb, if it is hard to read it will be hard
 to maintain!
 
@@ -456,7 +461,7 @@ Below is a simple example of a readable loop:
 
 Avoid putting a Jinja conditionals within Salt states where possible.
 Readability suffers and the correct YAML indentation is difficult to see in the
-surrounding visual noise. Parameterization (discussed below) and variables are
+surrounding visual noise. Parametrization (discussed below) and variables are
 both useful techniques to avoid this. For example:
 
 .. code-block:: yaml
@@ -495,7 +500,7 @@ both useful techniques to avoid this. For example:
         - name: {{ name }}
 
 Dictionaries are useful to effectively "namespace" a collection of variables.
-This is useful with parameterization (discussed below). Dictionaries are also
+This is useful with parametrization (discussed below). Dictionaries are also
 easily combined and merged. And they can be directly serialized into YAML which
 is often easier than trying to create valid YAML through templating. For
 example:
@@ -577,7 +582,7 @@ read it will be hard to maintain -- switch to a format that is easier to read.
 Using alternate renderers is very simple to do using Salt's "she-bang" syntax
 at the top of the file. The Python renderer must simply return the correct
 :ref:`highstate data structure <states-highstate-example>`. The following
-example is a state tree of two sls files, one simple and one complicated. 
+example is a state tree of two sls files, one simple and one complicated.
 
 ``/srv/salt/top.sls``:
 
@@ -680,10 +685,11 @@ example, the following macro could be used to write a php.ini config file:
 
 .. code-block:: yaml
 
-    PHP:
-      engine: 'On'
-      short_open_tag: 'Off'
-      error_reporting: 'E_ALL & ~E_DEPRECATED & ~E_STRICT'
+    php_ini:
+      PHP:
+        engine: 'On'
+        short_open_tag: 'Off'
+        error_reporting: 'E_ALL & ~E_DEPRECATED & ~E_STRICT'
 
 ``/srv/salt/php.ini.tmpl``:
 
@@ -691,8 +697,8 @@ example, the following macro could be used to write a php.ini config file:
 
     {% macro php_ini_serializer(data) %}
     {% for section_name, name_val_pairs in data.items() %}
-    [{{ section }}]
-    {% for name, val in name_val_pairs.items() %}
+    [{{ section_name }}]
+    {% for name, val in name_val_pairs.items() -%}
     {{ name }} = "{{ val }}"
     {% endfor %}
     {% endfor %}
@@ -772,13 +778,27 @@ state file using the following syntax:
       service.running:
         - name: {{ mysql.service }}
 
+Organizing Pillar data
+``````````````````````
+
+It is considered a best practice to make formulas expect **all**
+formula-related parameters to be placed under second-level ``lookup`` key,
+within a main namespace designated for holding data for particular
+service/software/etc, managed by the formula:
+
+.. code-block:: yaml
+
+    mysql:
+      lookup:
+        version: 5.7.11
+
 Collecting common values
 ````````````````````````
 
 Common values can be collected into a *base* dictionary.  This
 minimizes repetition of identical values in each of the
 ``lookup_dict`` sub-dictionaries.  Now only the values that are
-different from the base must be specified of the alternates:
+different from the base must be specified by the alternates:
 
 :file:`map.jinja`:
 
@@ -806,7 +826,7 @@ different from the base must be specified of the alternates:
             'python': 'dev-python/mysql-python',
         },
     },
-    merge=salt['pillar.get']('mysql:lookup'), default='default') %}
+    merge=salt['pillar.get']('mysql:lookup'), base='default') %}
 
 
 Overriding values in the lookup table
@@ -879,7 +899,7 @@ When to use lookup tables
 The ``map.jinja`` file is only a convention within Salt Formulas. This greater
 pattern is useful for a wide variety of data in a wide variety of workflows.
 This pattern is not limited to pulling data from a single file or data source.
-This pattern is useful in States, Pillar, the Reactor, and Overstate as well.
+This pattern is useful in States, Pillar and the Reactor, for example.
 
 Working with a data structure instead of, say, a config file allows the data to
 be cobbled together from multiple sources (local files, remote Pillar, database
@@ -944,9 +964,9 @@ XML.)
 
 .. code-block:: yaml
 
-    {% load_yaml 'tomcat/defaults.yaml' as server_xml_defaults %}
+    {% import_yaml 'tomcat/defaults.yaml' as server_xml_defaults %}
     {% set server_xml_final_values = salt.pillar.get(
-        'appX:server_xml_overrides', 
+        'appX:server_xml_overrides',
         default=server_xml_defaults,
         merge=True)
     %}
@@ -980,7 +1000,7 @@ example:
 .. code-block:: yaml
 
     {# Load the map file. #}
-    {% load_yaml 'app/defaults.yaml' as app_defaults %}
+    {% import_yaml 'app/defaults.yaml' as app_defaults %}
 
     {# Extract the relevant subset for the app configured on the current
        machine (configured via a grain in this example). #}
@@ -1297,9 +1317,9 @@ structure can be performed by with the :py:func:`state.show_sls
     salt '*' state.show_sls apache
 
 Salt Formulas can then be tested by running each ``.sls`` file via
-:py:func:`state.sls <salt.modules.state.sls>` and checking the output for the
-success or failure of each state in the Formula. This should be done for each
-supported platform.
+:py:func:`state.apply <salt.modules.state.apply_>` and checking the output for
+the success or failure of each state in the Formula. This should be done for
+each supported platform.
 
 .. ............................................................................
 

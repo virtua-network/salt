@@ -6,11 +6,14 @@ Return/control aspects of the grains data
 # Import python libs
 from __future__ import absolute_import
 import collections
+import copy
 import math
+import json
 
 # Import salt libs
 import salt.utils
 import salt.utils.dictupdate
+from salt.defaults import DEFAULT_TARGET_DELIM
 from salt.exceptions import SaltException
 
 # Import 3rd-party libs
@@ -45,7 +48,7 @@ _SANITIZERS = {
 }
 
 
-def get(key, default=''):
+def get(key, default='', delimiter=DEFAULT_TARGET_DELIM, ordered=True):
     '''
     Attempt to retrieve the named value from grains, if the named value is not
     available return the passed default. The default return is an empty string.
@@ -66,7 +69,35 @@ def get(key, default=''):
 
         salt '*' grains.get pkg:apache
     '''
-    return salt.utils.traverse_dict_and_list(__grains__, key, default)
+    if ordered is True:
+        grains = __grains__
+    else:
+        grains = json.loads(json.dumps(__grains__))
+    return salt.utils.traverse_dict_and_list(__grains__,
+                                             key,
+                                             default,
+                                             delimiter)
+
+
+def has_value(key):
+    '''
+    Determine whether a named value exists in the grains dictionary.
+
+    Given a grains dictionary that contains the following structure::
+
+        {'pkg': {'apache': 'httpd'}}
+
+    One would determine if the apache key in the pkg dict exists by::
+
+        pkg:apache
+
+    CLI Example:
+
+    .. code-block:: bash
+
+        salt '*' grains.has_value pkg:apache
+    '''
+    return True if salt.utils.traverse_dict_and_list(__grains__, key, False) else False
 
 
 def items(sanitize=False):
@@ -138,7 +169,11 @@ def ls():  # pylint: disable=C0103
     return sorted(__grains__)
 
 
-def filter_by(lookup_dict, grain='os_family', merge=None, default='default'):
+def filter_by(lookup_dict,
+              grain='os_family',
+              merge=None,
+              default='default',
+              base=None):
     '''
     .. versionadded:: 0.17.0
 
@@ -201,6 +236,14 @@ def filter_by(lookup_dict, grain='os_family', merge=None, default='default'):
 
          .. versionadded:: 2014.1.0
 
+    :param base: A lookup_dict key to use for a base dictionary. The
+        grain-selected ``lookup_dict`` is merged over this and then finally
+        the ``merge`` dictionary is merged. This allows common values for
+        each case to be collected in the base and overridden by the grain
+        selection dictionary and the merge dictionary. Default is None.
+
+        .. versionadded:: 2015.8.11, 2016.3.2
+
     CLI Example:
 
     .. code-block:: bash
@@ -216,15 +259,22 @@ def filter_by(lookup_dict, grain='os_family', merge=None, default='default'):
                 default, None)
             )
 
+    if base and base in lookup_dict:
+        base_values = lookup_dict[base]
+        if ret is None:
+            ret = base_values
+
+        elif isinstance(base_values, collections.Mapping):
+            if not isinstance(ret, collections.Mapping):
+                raise SaltException('filter_by default and look-up values must both be dictionaries.')
+            ret = salt.utils.dictupdate.update(copy.deepcopy(base_values), ret)
+
     if merge:
         if not isinstance(merge, collections.Mapping):
             raise SaltException('filter_by merge argument must be a dictionary.')
-
         else:
-
             if ret is None:
                 ret = merge
-
             else:
                 salt.utils.dictupdate.update(ret, merge)
 

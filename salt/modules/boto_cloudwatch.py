@@ -5,19 +5,25 @@ Connection module for Amazon CloudWatch
 .. versionadded:: 2014.7.0
 
 :configuration: This module accepts explicit credentials but can also utilize
-    IAM roles assigned to the instance trough Instance Profiles. Dynamic
+    IAM roles assigned to the instance through Instance Profiles. Dynamic
     credentials are then automatically obtained from AWS API and no further
-    configuration is necessary. More Information available at::
+    configuration is necessary. More Information available at:
 
-       http://docs.aws.amazon.com/AWSEC2/latest/UserGuide/iam-roles-for-amazon-ec2.html
+    .. code-block:: text
+
+        http://docs.aws.amazon.com/AWSEC2/latest/UserGuide/iam-roles-for-amazon-ec2.html
 
     If IAM roles are not used you need to specify them either in a pillar or
-    in the minion's config file::
+    in the minion's config file:
+
+    .. code-block:: yaml
 
         cloudwatch.keyid: GKTADJGHEIQSXMKKRBJ08H
         cloudwatch.key: askdjghsdfjkghWupUjasdflkdfklgjsdfjajkghs
 
-    A region may also be specified in the configuration::
+    A region may also be specified in the configuration:
+
+    .. code-block:: yaml
 
         cloudwatch.region: us-east-1
 
@@ -25,6 +31,8 @@ Connection module for Amazon CloudWatch
 
     It's also possible to specify key, keyid and region via a profile, either
     as a passed in dict, or as a string to pull from pillars or minion config:
+
+    .. code-block:: yaml
 
         myprofile:
             keyid: GKTADJGHEIQSXMKKRBJ08H
@@ -66,9 +74,10 @@ def __virtual__():
     Only load if boto libraries exist.
     '''
     if not HAS_BOTO:
-        return False
+        return (False, 'The boto_cloudwatch module cannot be loaded: boto libraries are unavailable.')
     __utils__['boto.assign_funcs'](__name__, 'cloudwatch',
-                                   module='ec2.cloudwatch')
+                                   module='ec2.cloudwatch',
+                                   pack=__salt__)
     return True
 
 
@@ -182,7 +191,7 @@ def create_or_update_alarm(
     Create or update a cloudwatch alarm.
 
     Params are the same as:
-        http://boto.readthedocs.org/en/latest/ref/cloudwatch.html#boto.ec2.cloudwatch.alarm.MetricAlarm.
+        https://boto.readthedocs.io/en/latest/ref/cloudwatch.html#boto.ec2.cloudwatch.alarm.MetricAlarm.
 
     Dimensions must be a dict. If the value of Dimensions is a string, it will
     be json decoded to produce a dict. alarm_actions, insufficient_data_actions,
@@ -223,12 +232,25 @@ def create_or_update_alarm(
     if isinstance(ok_actions, string_types):
         ok_actions = ok_actions.split(",")
 
-    # convert action names into ARN's
-    alarm_actions = convert_to_arn(alarm_actions, region, key, keyid, profile)
-    insufficient_data_actions = convert_to_arn(
-        insufficient_data_actions, region, key, keyid, profile
-    )
-    ok_actions = convert_to_arn(ok_actions, region, key, keyid, profile)
+    # convert provided action names into ARN's
+    if alarm_actions:
+        alarm_actions = convert_to_arn(alarm_actions,
+                                       region=region,
+                                       key=key,
+                                       keyid=keyid,
+                                       profile=profile)
+    if insufficient_data_actions:
+        insufficient_data_actions = convert_to_arn(insufficient_data_actions,
+                                                   region=region,
+                                                   key=key,
+                                                   keyid=keyid,
+                                                   profile=profile)
+    if ok_actions:
+        ok_actions = convert_to_arn(ok_actions,
+                                    region=region,
+                                    key=key,
+                                    keyid=keyid,
+                                    profile=profile)
 
     conn = _get_conn(region=region, key=key, keyid=keyid, profile=profile)
 

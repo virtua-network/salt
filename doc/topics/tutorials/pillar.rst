@@ -34,9 +34,9 @@ Variables:
     minions can be defined in pillar and then accessed inside sls formulas
     and template files.
 Arbitrary Data:
-    Pillar can contain any basic data structure, so a list of values, or a
-    key/value store can be defined making it easy to iterate over a group
-    of values in sls formulas
+    Pillar can contain any basic data structure in dictionary format,
+    so a key/value store can be defined making it easy to iterate over a group
+    of values in sls formulas.
 
 Pillar is therefore one of the most important systems when using Salt. This
 walkthrough is designed to get a simple Pillar up and running in a few minutes
@@ -68,7 +68,8 @@ The default location for the pillar is in /srv/pillar.
 
     The pillar location can be configured via the `pillar_roots` option inside
     the master configuration file. It must not be in a subdirectory of the state
-    tree.
+    tree or file_roots. If the pillar is under file_roots, any pillar targeting
+    can be bypassed by minions.
 
 To start setting up the pillar, the /srv/pillar directory needs to be present:
 
@@ -296,30 +297,41 @@ Ensuring that the right vimrc is sent out to the correct minions.
 Setting Pillar Data on the Command Line
 =======================================
 
-Pillar data can be set on the command line like so:
+Pillar data can be set on the command line when running :py:func:`state.apply
+<salt.modules.state.apply_` like so:
 
 .. code-block:: bash
 
-    salt '*' state.highstate pillar='{"foo": "bar"}'
+    salt '*' state.apply pillar='{"foo": "bar"}'
+    salt '*' state.apply my_sls_file pillar='{"hello": "world"}'
 
-The ``state.sls`` command can also be used to set pillar values via the command
-line:
-
-.. code-block:: bash
-
-    salt '*' state.sls my_sls_file pillar='{"hello": "world"}'
-
-Lists can be passed in pillar as well:
+Nested pillar values can also be set via the command line:
 
 .. code-block:: bash
 
-    salt '*' state.highstate pillar='["foo", "bar", "baz"]'
+   salt '*' state.sls my_sls_file pillar='{"foo": {"bar": "baz"}}'
 
 .. note::
 
     If a key is passed on the command line that already exists on the minion,
     the key that is passed in will overwrite the entire value of that key,
     rather than merging only the specified value set via the command line.
+
+The example below will swap the value for vim with telnet in the previously
+specified list, notice the nested pillar dict:
+
+.. code-block:: bash
+
+    salt '*' state.apply edit.vim pillar='{"pkgs": {"vim": "telnet"}}'
+
+This will attempt to install telnet on your minions, feel free to
+uninstall the package or replace telnet value with anything else.
+
+.. note::
+   Be aware that when sending sensitive data via pillar on the command-line
+   that the publication containing that data will be received by all minions
+   and will not be restricted to the targeted minions. This may represent
+   a security concern in some cases.
 
 More On Pillar
 ==============

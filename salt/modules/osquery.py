@@ -1,6 +1,8 @@
 # -*- coding: utf-8 -*-
 '''
-Support for OSQuery - https://osquery.io
+Support for OSQuery - https://osquery.io.
+
+.. versionadded:: 2015.8.0
 '''
 from __future__ import absolute_import
 
@@ -20,11 +22,14 @@ __func_alias__ = {
     'time_': 'time',
 }
 
+__virtualname__ = 'osquery'
+
 
 def __virtual__():
     if salt.utils.which('osqueryi'):
-        return 'osquery'
-    return False
+        return __virtualname__
+    return (False, 'The osquery execution module cannot be loaded: '
+            'osqueryi binary is not in the path.')
 
 
 def _table_attrs(table):
@@ -106,8 +111,6 @@ def _osquery_cmd(table, attrs=None, where=None, format='json'):
 
 def version():
     '''
-    .. versionadded:: Beryllium
-
     Return version of osquery
 
     CLI Example:
@@ -123,8 +126,6 @@ def version():
 
 def rpm_packages(attrs=None, where=None):
     '''
-    .. versionadded:: Beryllium
-
     Return cpuid information from osquery
 
     CLI Example:
@@ -140,8 +141,6 @@ def rpm_packages(attrs=None, where=None):
 
 def kernel_integrity(attrs=None, where=None):
     '''
-    .. versionadded:: Beryllium
-
     Return kernel_integrity information from osquery
 
     CLI Example:
@@ -157,8 +156,6 @@ def kernel_integrity(attrs=None, where=None):
 
 def kernel_modules(attrs=None, where=None):
     '''
-    .. versionadded:: Beryllium
-
     Return kernel_modules information from osquery
 
     CLI Example:
@@ -174,8 +171,6 @@ def kernel_modules(attrs=None, where=None):
 
 def memory_map(attrs=None, where=None):
     '''
-    .. versionadded:: Beryllium
-
     Return memory_map information from osquery
 
     CLI Example:
@@ -191,8 +186,6 @@ def memory_map(attrs=None, where=None):
 
 def process_memory_map(attrs=None, where=None):
     '''
-    .. versionadded:: Beryllium
-
     Return process_memory_map information from osquery
 
     CLI Example:
@@ -208,8 +201,6 @@ def process_memory_map(attrs=None, where=None):
 
 def shared_memory(attrs=None, where=None):
     '''
-    .. versionadded:: Beryllium
-
     Return shared_memory information from osquery
 
     CLI Example:
@@ -225,8 +216,6 @@ def shared_memory(attrs=None, where=None):
 
 def apt_sources(attrs=None, where=None):
     '''
-    .. versionadded:: Beryllium
-
     Return apt_sources information from osquery
 
     CLI Example:
@@ -242,8 +231,6 @@ def apt_sources(attrs=None, where=None):
 
 def deb_packages(attrs=None, where=None):
     '''
-    .. versionadded:: Beryllium
-
     Return deb_packages information from osquery
 
     CLI Example:
@@ -259,8 +246,6 @@ def deb_packages(attrs=None, where=None):
 
 def acpi_tables(attrs=None, where=None):
     '''
-    .. versionadded:: Beryllium
-
     Return acpi_tables information from osquery
 
     CLI Example:
@@ -274,8 +259,6 @@ def acpi_tables(attrs=None, where=None):
 
 def arp_cache(attrs=None, where=None):
     '''
-    .. versionadded:: Beryllium
-
     Return arp_cache information from osquery
 
     CLI Example:
@@ -289,8 +272,6 @@ def arp_cache(attrs=None, where=None):
 
 def block_devices(attrs=None, where=None):
     '''
-    .. versionadded:: Beryllium
-
     Return block_devices information from osquery
 
     CLI Example:
@@ -304,8 +285,6 @@ def block_devices(attrs=None, where=None):
 
 def cpuid(attrs=None, where=None):
     '''
-    .. versionadded:: Beryllium
-
     Return cpuid information from osquery
 
     CLI Example:
@@ -319,8 +298,6 @@ def cpuid(attrs=None, where=None):
 
 def crontab(attrs=None, where=None):
     '''
-    .. versionadded:: Beryllium
-
     Return crontab information from osquery
 
     CLI Example:
@@ -334,8 +311,6 @@ def crontab(attrs=None, where=None):
 
 def etc_hosts(attrs=None, where=None):
     '''
-    .. versionadded:: Beryllium
-
     Return etc_hosts information from osquery
 
     CLI Example:
@@ -362,8 +337,6 @@ def etc_services(attrs=None, where=None):
 
 def file_changes(attrs=None, where=None):
     '''
-    .. versionadded:: Beryllium
-
     Return file_changes information from osquery
 
     CLI Example:
@@ -377,8 +350,6 @@ def file_changes(attrs=None, where=None):
 
 def groups(attrs=None, where=None):
     '''
-    .. versionadded:: Beryllium
-
     Return groups information from osquery
 
     CLI Example:
@@ -392,8 +363,6 @@ def groups(attrs=None, where=None):
 
 def hardware_events(attrs=None, where=None):
     '''
-    .. versionadded:: Beryllium
-
     Return hardware_events information from osquery
 
     CLI Example:
@@ -407,8 +376,6 @@ def hardware_events(attrs=None, where=None):
 
 def interface_addresses(attrs=None, where=None):
     '''
-    .. versionadded:: Beryllium
-
     Return interface_addresses information from osquery
 
     CLI Example:
@@ -422,8 +389,6 @@ def interface_addresses(attrs=None, where=None):
 
 def interface_details(attrs=None, where=None):
     '''
-    .. versionadded:: Beryllium
-
     Return interface_details information from osquery
 
     CLI Example:
@@ -437,8 +402,6 @@ def interface_details(attrs=None, where=None):
 
 def kernel_info(attrs=None, where=None):
     '''
-    .. versionadded:: Beryllium
-
     Return kernel_info information from osquery
 
     CLI Example:
@@ -452,8 +415,6 @@ def kernel_info(attrs=None, where=None):
 
 def last(attrs=None, where=None):
     '''
-    .. versionadded:: Beryllium
-
     Return last information from osquery
 
     CLI Example:
@@ -466,10 +427,8 @@ def last(attrs=None, where=None):
 
 
 def listening_ports(attrs=None, where=None):
-    '''
-    .. versionadded:: Beryllium
-
-    Return listening_ports_ information from osquery
+    r'''
+    Return listening_ports information from osquery
 
     CLI Example:
 
@@ -481,10 +440,8 @@ def listening_ports(attrs=None, where=None):
 
 
 def logged_in_users(attrs=None, where=None):
-    '''
-    .. versionadded:: Beryllium
-
-    Return logged_in_users_ information from osquery
+    r'''
+    Return logged_in_users information from osquery
 
     CLI Example:
 
@@ -496,10 +453,8 @@ def logged_in_users(attrs=None, where=None):
 
 
 def mounts(attrs=None, where=None):
-    '''
-    .. versionadded:: Beryllium
-
-    Return mounts_ information from osquery
+    r'''
+    Return mounts information from osquery
 
     CLI Example:
 
@@ -512,8 +467,6 @@ def mounts(attrs=None, where=None):
 
 def os_version(attrs=None, where=None):
     '''
-    .. versionadded:: Beryllium
-
     Return os_version information from osquery
 
     CLI Example:
@@ -527,8 +480,6 @@ def os_version(attrs=None, where=None):
 
 def passwd_changes(attrs=None, where=None):
     '''
-    .. versionadded:: Beryllium
-
     Return passwd_changes information from osquery
 
     CLI Example:
@@ -542,8 +493,6 @@ def passwd_changes(attrs=None, where=None):
 
 def pci_devices(attrs=None, where=None):
     '''
-    .. versionadded:: Beryllium
-
     Return pci_devices information from osquery
 
     CLI Example:
@@ -557,8 +506,6 @@ def pci_devices(attrs=None, where=None):
 
 def process_envs(attrs=None, where=None):
     '''
-    .. versionadded:: Beryllium
-
     Return process_envs information from osquery
 
     CLI Example:
@@ -572,8 +519,6 @@ def process_envs(attrs=None, where=None):
 
 def process_open_files(attrs=None, where=None):
     '''
-    .. versionadded:: Beryllium
-
     Return process_open_files information from osquery
 
     CLI Example:
@@ -587,8 +532,6 @@ def process_open_files(attrs=None, where=None):
 
 def process_open_sockets(attrs=None, where=None):
     '''
-    .. versionadded:: Beryllium
-
     Return process_open_sockets information from osquery
 
     CLI Example:
@@ -602,8 +545,6 @@ def process_open_sockets(attrs=None, where=None):
 
 def processes(attrs=None, where=None):
     '''
-    .. versionadded:: Beryllium
-
     Return processes information from osquery
 
     CLI Example:
@@ -617,8 +558,6 @@ def processes(attrs=None, where=None):
 
 def routes(attrs=None, where=None):
     '''
-    .. versionadded:: Beryllium
-
     Return routes information from osquery
 
     CLI Example:
@@ -632,8 +571,6 @@ def routes(attrs=None, where=None):
 
 def shell_history(attrs=None, where=None):
     '''
-    .. versionadded:: Beryllium
-
     Return shell_history information from osquery
 
     CLI Example:
@@ -647,8 +584,6 @@ def shell_history(attrs=None, where=None):
 
 def smbios_tables(attrs=None, where=None):
     '''
-    .. versionadded:: Beryllium
-
     Return smbios_tables information from osquery
 
     CLI Example:
@@ -662,8 +597,6 @@ def smbios_tables(attrs=None, where=None):
 
 def suid_bin(attrs=None, where=None):
     '''
-    .. versionadded:: Beryllium
-
     Return suid_bin information from osquery
 
     CLI Example:
@@ -677,8 +610,6 @@ def suid_bin(attrs=None, where=None):
 
 def system_controls(attrs=None, where=None):
     '''
-    .. versionadded:: Beryllium
-
     Return system_controls information from osquery
 
     CLI Example:
@@ -692,8 +623,6 @@ def system_controls(attrs=None, where=None):
 
 def usb_devices(attrs=None, where=None):
     '''
-    .. versionadded:: Beryllium
-
     Return usb_devices information from osquery
 
     CLI Example:
@@ -707,8 +636,6 @@ def usb_devices(attrs=None, where=None):
 
 def users(attrs=None, where=None):
     '''
-    .. versionadded:: Beryllium
-
     Return users information from osquery
 
     CLI Example:
@@ -722,8 +649,6 @@ def users(attrs=None, where=None):
 
 def alf(attrs=None, where=None):
     '''
-    .. versionadded:: Beryllium
-
     Return alf information from osquery
 
     CLI Example:
@@ -739,8 +664,6 @@ def alf(attrs=None, where=None):
 
 def alf_exceptions(attrs=None, where=None):
     '''
-    .. versionadded:: Beryllium
-
     Return alf_exceptions information from osquery
 
     CLI Example:
@@ -756,8 +679,6 @@ def alf_exceptions(attrs=None, where=None):
 
 def alf_explicit_auths(attrs=None, where=None):
     '''
-    .. versionadded:: Beryllium
-
     Return alf_explicit_auths information from osquery
 
     CLI Example:
@@ -773,8 +694,6 @@ def alf_explicit_auths(attrs=None, where=None):
 
 def alf_services(attrs=None, where=None):
     '''
-    .. versionadded:: Beryllium
-
     Return alf_services information from osquery
 
     CLI Example:
@@ -790,8 +709,6 @@ def alf_services(attrs=None, where=None):
 
 def apps(attrs=None, where=None):
     '''
-    .. versionadded:: Beryllium
-
     Return apps information from osquery
 
     CLI Example:
@@ -807,8 +724,6 @@ def apps(attrs=None, where=None):
 
 def certificates(attrs=None, where=None):
     '''
-    .. versionadded:: Beryllium
-
     Return certificates information from osquery
 
     CLI Example:
@@ -824,8 +739,6 @@ def certificates(attrs=None, where=None):
 
 def chrome_extensions(attrs=None, where=None):
     '''
-    .. versionadded:: Beryllium
-
     Return chrome_extensions information from osquery
 
     CLI Example:
@@ -841,8 +754,6 @@ def chrome_extensions(attrs=None, where=None):
 
 def firefox_addons(attrs=None, where=None):
     '''
-    .. versionadded:: Beryllium
-
     Return firefox_addons information from osquery
 
     CLI Example:
@@ -858,8 +769,6 @@ def firefox_addons(attrs=None, where=None):
 
 def homebrew_packages(attrs=None, where=None):
     '''
-    .. versionadded:: Beryllium
-
     Return homebrew_packages information from osquery
 
     CLI Example:
@@ -875,8 +784,6 @@ def homebrew_packages(attrs=None, where=None):
 
 def iokit_devicetree(attrs=None, where=None):
     '''
-    .. versionadded:: Beryllium
-
     Return iokit_devicetree information from osquery
 
     CLI Example:
@@ -892,8 +799,6 @@ def iokit_devicetree(attrs=None, where=None):
 
 def iokit_registry(attrs=None, where=None):
     '''
-    .. versionadded:: Beryllium
-
     Return iokit_registry information from osquery
 
     CLI Example:
@@ -909,8 +814,6 @@ def iokit_registry(attrs=None, where=None):
 
 def kernel_extensions(attrs=None, where=None):
     '''
-    .. versionadded:: Beryllium
-
     Return kernel_extensions information from osquery
 
     CLI Example:
@@ -926,8 +829,6 @@ def kernel_extensions(attrs=None, where=None):
 
 def keychain_items(attrs=None, where=None):
     '''
-    .. versionadded:: Beryllium
-
     Return keychain_items information from osquery
 
     CLI Example:
@@ -943,8 +844,6 @@ def keychain_items(attrs=None, where=None):
 
 def launchd(attrs=None, where=None):
     '''
-    .. versionadded:: Beryllium
-
     Return launchd information from osquery
 
     CLI Example:
@@ -960,8 +859,6 @@ def launchd(attrs=None, where=None):
 
 def nfs_shares(attrs=None, where=None):
     '''
-    .. versionadded:: Beryllium
-
     Return nfs_shares information from osquery
 
     CLI Example:
@@ -977,8 +874,6 @@ def nfs_shares(attrs=None, where=None):
 
 def nvram(attrs=None, where=None):
     '''
-    .. versionadded:: Beryllium
-
     Return nvram information from osquery
 
     CLI Example:
@@ -994,8 +889,6 @@ def nvram(attrs=None, where=None):
 
 def preferences(attrs=None, where=None):
     '''
-    .. versionadded:: Beryllium
-
     Return preferences information from osquery
 
     CLI Example:
@@ -1011,8 +904,6 @@ def preferences(attrs=None, where=None):
 
 def quarantine(attrs=None, where=None):
     '''
-    .. versionadded:: Beryllium
-
     Return quarantine information from osquery
 
     CLI Example:
@@ -1028,8 +919,6 @@ def quarantine(attrs=None, where=None):
 
 def safari_extensions(attrs=None, where=None):
     '''
-    .. versionadded:: Beryllium
-
     Return safari_extensions information from osquery
 
     CLI Example:
@@ -1045,8 +934,6 @@ def safari_extensions(attrs=None, where=None):
 
 def startup_items(attrs=None, where=None):
     '''
-    .. versionadded:: Beryllium
-
     Return startup_items information from osquery
 
     CLI Example:
@@ -1062,8 +949,6 @@ def startup_items(attrs=None, where=None):
 
 def xattr_where_from(attrs=None, where=None):
     '''
-    .. versionadded:: Beryllium
-
     Return xattr_where_from information from osquery
 
     CLI Example:
@@ -1079,8 +964,6 @@ def xattr_where_from(attrs=None, where=None):
 
 def xprotect_entries(attrs=None, where=None):
     '''
-    .. versionadded:: Beryllium
-
     Return xprotect_entries information from osquery
 
     CLI Example:
@@ -1096,8 +979,6 @@ def xprotect_entries(attrs=None, where=None):
 
 def xprotect_reports(attrs=None, where=None):
     '''
-    .. versionadded:: Beryllium
-
     Return xprotect_reports information from osquery
 
     CLI Example:
@@ -1113,8 +994,6 @@ def xprotect_reports(attrs=None, where=None):
 
 def file_(attrs=None, where=None):
     '''
-    .. versionadded:: Beryllium
-
     Return file information from osquery
 
     CLI Example:
@@ -1128,8 +1007,6 @@ def file_(attrs=None, where=None):
 
 def hash_(attrs=None, where=None):
     '''
-    .. versionadded:: Beryllium
-
     Return hash information from osquery
 
     CLI Example:
@@ -1143,8 +1020,6 @@ def hash_(attrs=None, where=None):
 
 def osquery_extensions(attrs=None, where=None):
     '''
-    .. versionadded:: Beryllium
-
     Return osquery_extensions information from osquery
 
     CLI Example:
@@ -1158,8 +1033,6 @@ def osquery_extensions(attrs=None, where=None):
 
 def osquery_flags(attrs=None, where=None):
     '''
-    .. versionadded:: Beryllium
-
     Return osquery_flags information from osquery
 
     CLI Example:
@@ -1173,8 +1046,6 @@ def osquery_flags(attrs=None, where=None):
 
 def osquery_info(attrs=None, where=None):
     '''
-    .. versionadded:: Beryllium
-
     Return osquery_info information from osquery
 
     CLI Example:
@@ -1188,8 +1059,6 @@ def osquery_info(attrs=None, where=None):
 
 def osquery_registry(attrs=None, where=None):
     '''
-    .. versionadded:: Beryllium
-
     Return osquery_registry information from osquery
 
     CLI Example:
@@ -1203,8 +1072,6 @@ def osquery_registry(attrs=None, where=None):
 
 def time_(attrs=None):
     '''
-    .. versionadded:: Beryllium
-
     Return time information from osquery
 
     CLI Example:
@@ -1218,8 +1085,6 @@ def time_(attrs=None):
 
 def query(sql=None):
     '''
-    .. versionadded:: Beryllium
-
     Return time information from osquery
 
     CLI Example:

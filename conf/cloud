@@ -1,4 +1,4 @@
-# This file should normally be installed at: /etc/salt/cloud 
+# This file should normally be installed at: /etc/salt/cloud
 
 
 ##########################################
@@ -28,6 +28,9 @@
 # The level of messages to send to the console.
 # One of 'garbage', 'trace', 'debug', info', 'warning', 'error', 'critical'.
 #
+# The following log levels are considered INSECURE and may log sensitive data:
+# ['garbage', 'trace', 'debug']
+#
 # Default: 'info'
 #
 #log_level: info
@@ -41,7 +44,7 @@
 #log_level_logfile: info
 
 
-# The date and time format used in log messages. Allowed date/time formating
+# The date and time format used in log messages. Allowed date/time formatting
 # can be seen here:
 #
 #	http://docs.python.org/library/time.html#time.strftime
@@ -65,8 +68,10 @@
 # the coloring of the messages, these color formatters also include padding as
 # well.  Color LogRecord attributes are only available for console logging.
 #
+#log_fmt_console: '%(colorlevel)s %(colormsg)s'
 #log_fmt_console: '[%(levelname)-8s] %(message)s'
-#log_fmt_logfile: '%(asctime)s,%(msecs)03.0f [%(name)-17s][%(levelname)-8s] %(message)s'
+#
+#log_fmt_logfile: '%(asctime)s,%(msecs)03d [%(name)-17s][%(levelname)-8s] %(message)s'
 
 
 # Logger levels can be used to tweak specific loggers logging levels.

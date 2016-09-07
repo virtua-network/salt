@@ -6,8 +6,8 @@
 # Import Python Libs
 from __future__ import absolute_import
 import salt.utils
-import new
 import sys
+import types
 
 # Import Salt Testing Libs
 from salttesting import TestCase, skipIf
@@ -24,7 +24,7 @@ from salttesting.helpers import ensure_in_syspath
 ensure_in_syspath('../../')
 
 # wmi modules are platform specific...
-wmi = new.module('wmi')
+wmi = types.ModuleType('wmi')
 sys.modules['wmi'] = wmi
 
 if NO_MOCK is False:
@@ -177,7 +177,9 @@ class WinNetworkTestCase(TestCase):
         '''
         Test if it return information about all the interfaces on the minion
         '''
-        self.assertTrue(win_network.interfaces())
+        with patch.object(salt.utils.network, 'win_interfaces',
+                          MagicMock(return_value=True)):
+            self.assertTrue(win_network.interfaces())
 
     # 'hw_addr' function tests: 1
 
@@ -210,22 +212,6 @@ class WinNetworkTestCase(TestCase):
         with patch.object(salt.utils.network, 'in_subnet',
                           MagicMock(return_value=True)):
             self.assertTrue(win_network.in_subnet('10.1.1.0/16'))
-
-    # 'ip_addrs' function tests: 1
-
-    def test_ip_addrs(self):
-        '''
-        Test if it returns a list of IPv4 addresses assigned to the host.
-        '''
-        self.assertTrue(win_network.ip_addrs())
-
-    # 'ip_addrs6' function tests: 1
-
-    def test_ip_addrs6(self):
-        '''
-        Test if it returns a list of IPv6 addresses assigned to the host.
-        '''
-        self.assertTrue(win_network.ip_addrs6())
 
 
 if __name__ == '__main__':

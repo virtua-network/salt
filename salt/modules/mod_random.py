@@ -1,12 +1,15 @@
 # -*- coding: utf-8 -*-
 '''
+Provides access to randomness generators.
+=========================================
+
 .. versionadded:: 2014.7.0
 
-Provides access to randomness generators.
 '''
 from __future__ import absolute_import
 # Import python libs
 import hashlib
+import random
 
 # Import salt libs
 import salt.utils.pycrypto
@@ -16,14 +19,15 @@ from salt.exceptions import SaltInvocationError
 __virtualname__ = 'random'
 
 
-def __virtual__():
+def __virtual__(algorithm='sha512'):
     '''
-    Confirm this module is on a Debian based system
+    Sanity check for compatibility with Python 2.6 / 2.7
     '''
-    # Certain versions of hashlib do not contain
-    # the necessary functions
-    if not hasattr(hashlib, 'algorithms'):
-        return False
+    # The hashlib function on Python <= 2.6 does not provide the attribute 'algorithms'
+    # This attribute was introduced on Python >= 2.7
+    if not hasattr(hashlib, 'algorithms') and not hasattr(hashlib, algorithm):
+        return (False, 'The random execution module cannot be loaded: only available in Python >= 2.7.')
+
     return __virtualname__
 
 
@@ -46,7 +50,11 @@ def hash(value, algorithm='sha512'):
 
         salt '*' random.hash 'I am a string' md5
     '''
-    if algorithm in hashlib.algorithms:
+    if hasattr(hashlib, 'algorithms') and algorithm in hashlib.algorithms:
+        hasher = hashlib.new(algorithm)
+        hasher.update(value)
+        out = hasher.hexdigest()
+    elif hasattr(hashlib, algorithm):
         hasher = hashlib.new(algorithm)
         hasher.update(value)
         out = hasher.hexdigest()
@@ -122,3 +130,50 @@ def shadow_hash(crypt_salt=None, password=None, algorithm='sha512'):
         salt '*' random.shadow_hash 'My5alT' 'MyP@asswd' md5
     '''
     return salt.utils.pycrypto.gen_hash(crypt_salt, password, algorithm)
+
+
+def rand_int(start=1, end=10):
+    '''
+    Returns a random integer number between the start and end number.
+
+    .. versionadded: 2015.5.3
+
+    start : 1
+        Any valid integer number
+
+    end : 10
+        Any valid integer number
+
+    CLI Example:
+
+    .. code-block:: bash
+
+        salt '*' random.rand_int 1 10
+    '''
+    return random.randint(start, end)
+
+
+def seed(range=10, hash=None):
+    '''
+    Returns a random number within a range. Optional hash argument can
+    be any hashable object. If hash is omitted or None, the id of the minion is used.
+
+    .. versionadded: 2015.8.0
+
+    hash: None
+        Any hashable object.
+
+    range: 10
+        Any valid integer number
+
+    CLI Example:
+
+    .. code-block:: bash
+
+        salt '*' random.seed 10 hash=None
+    '''
+    if hash is None:
+        hash = __grains__['id']
+
+    random.seed(hash)
+    return random.randrange(range)

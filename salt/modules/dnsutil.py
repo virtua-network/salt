@@ -99,20 +99,18 @@ def hosts_remove(hostsfile='/etc/hosts', entries=None):
         hosts = fp_.read()
 
     host_list = entries.split(',')
-    out_file = salt.utils.fopen(hostsfile, 'w')
-    for line in hosts.splitlines():
-        if not line or line.strip().startswith('#'):
-            out_file.write('{0}\n'.format(line))
-            continue
-        comps = line.split()
-        for host in host_list:
-            if host in comps[1:]:
-                comps.remove(host)
-        if len(comps) > 1:
-            out_file.write(' '.join(comps))
-            out_file.write('\n')
-
-    out_file.close()
+    with salt.utils.fopen(hostsfile, 'w') as out_file:
+        for line in hosts.splitlines():
+            if not line or line.strip().startswith('#'):
+                out_file.write('{0}\n'.format(line))
+                continue
+            comps = line.split()
+            for host in host_list:
+                if host in comps[1:]:
+                    comps.remove(host)
+            if len(comps) > 1:
+                out_file.write(' '.join(comps))
+                out_file.write('\n')
 
 
 def parse_zone(zonefile=None, zone=None):
@@ -175,7 +173,7 @@ def parse_zone(zonefile=None, zone=None):
             continue
         if comps[0] == 'IN':
             comps.insert(0, zonedict['ORIGIN'])
-        if not comps[0].endswith('.'):
+        if not comps[0].endswith('.') and 'NS' not in line:
             comps[0] = '{0}.{1}'.format(comps[0], zonedict['ORIGIN'])
         if comps[2] == 'NS':
             zonedict.setdefault('NS', []).append(comps[3])
@@ -183,6 +181,11 @@ def parse_zone(zonefile=None, zone=None):
             if 'MX' not in zonedict:
                 zonedict.setdefault('MX', []).append({'priority': comps[3],
                                                       'host': comps[4]})
+        elif comps[3] in ('A', 'AAAA'):
+            zonedict.setdefault(comps[3], {})[comps[0]] = {
+                'TARGET': comps[4],
+                'TTL': comps[1],
+            }
         else:
             zonedict.setdefault(comps[2], {})[comps[0]] = comps[3]
     return zonedict
@@ -355,7 +358,7 @@ def serial(zone='', update=False):
     '''
     Return, store and update a dns serial for your zone files.
 
-    zone: a keywork for a specific zone
+    zone: a keyword for a specific zone
 
     update: store an updated version of the serial in a grain
 
